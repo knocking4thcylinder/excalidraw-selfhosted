@@ -8,13 +8,34 @@ const crypto = require("crypto");
 
 const PORT = process.env.PORT || 3003;
 const FILE = process.env.CODES_FILE || "/data/codes.json";
+const ROOMS_FILE = process.env.ROOMS_FILE || "/data/rooms.json";
+const SCENES_FILE = process.env.SCENES_FILE || "/data/scenes.json";
 
 let codes = {};
 try { codes = JSON.parse(fs.readFileSync(FILE, "utf8")); } catch {}
+let rooms = {};
+try { rooms = JSON.parse(fs.readFileSync(ROOMS_FILE, "utf8")); } catch {}
+let scenes = {};
+try { scenes = JSON.parse(fs.readFileSync(SCENES_FILE, "utf8")); } catch {}
 
 const save = () => {
   try { fs.writeFileSync(FILE, JSON.stringify(codes, null, 2)); } catch (e) { console.error("save failed", e); }
 };
+const saveRooms = () => {
+  try { fs.writeFileSync(ROOMS_FILE, JSON.stringify(rooms, null, 2)); } catch (e) { console.error("save failed", e); }
+};
+const saveScenes = () => {
+  try { fs.writeFileSync(SCENES_FILE, JSON.stringify(scenes, null, 2)); } catch (e) { console.error("save failed", e); }
+};
+
+// JSON reply for the /api/rooms endpoints — never cached (like /api/resolve)
+const json = (res, status, obj) => {
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+  res.end(JSON.stringify(obj));
+};
+
+// purely-alphanumeric ids are case-normalized; keys are case-sensitive, never normalized
+const normId = (id) => (/^[A-Za-z0-9]+$/.test(id) ? id.toLowerCase() : id);
 
 // no 0/O, 1/I/L — codes are human-typed
 const ALPH = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -78,6 +99,114 @@ http
       const url = codes[r[1].toUpperCase()];
       res.writeHead(url ? 200 : 404, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify(url ? { url } : { error: "unknown code" }));
+      return;
+    }
+
+    if (req.method === "POST" && u.pathname === "/api/rooms") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let p = {};
+        try { p = JSON.parse(body); } catch {}
+        const { roomId, roomKey } = p;
+        if (typeof roomId !== "string" || typeof roomKey !== "string" || !roomId || !roomKey) {
+          json(res, 400, { error: "roomId and roomKey required" });
+          return;
+        }
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(roomId)) {
+          json(res, 400, { error: "invalid roomId" });
+          return;
+        }
+        const id = normId(roomId);
+        const room = rooms[id];
+        if (room) {
+          if (room.key !== roomKey) {
+            json(res, 409, { error: "roomId already registered with a different key" });
+            return;
+          }
+          room.lastActiveAt = Date.now();
+          saveRooms();
+          json(res, 200, { ok: true, created: false });
+          return;
+        }
+        rooms[id] = { key: roomKey, createdAt: Date.now(), lastActiveAt: Date.now(), hasScene: false };
+        saveRooms();
+        json(res, 200, { ok: true, created: true });
+      });
+      return;
+    }
+
+    if (req.method === "GET" && u.pathname === "/api/rooms") {
+      json(res, 200, {
+        rooms: Object.entries(rooms)
+          .map(([roomId, r]) => ({ roomId, key: r.key, createdAt: r.createdAt, lastActiveAt: r.lastActiveAt, hasScene: r.hasScene }))
+          .sort((a, b) => b.lastActiveAt - a.lastActiveAt),
+      });
+      return;
+    }
+
+    const hs = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/scene-history$/);
+    if (req.method === "GET" && hs) {
+      const id = normId(hs[1]);
+      const room = rooms[id];
+      if (!room) { json(res, 404, { error: "unknown room" }); return; }
+      if (u.searchParams.get("key") !== room.key) { json(res, 403, { error: "wrong key" }); return; }
+      const s = scenes[id];
+      if (!s) { json(res, 404, { error: "no scene" }); return; }
+      json(res, 200, { versions: [{ version: s.version, updatedAt: s.updatedAt }] });
+      return;
+    }
+
+    const sm = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/scene$/);
+    if (req.method === "GET" && sm) {
+      const id = normId(sm[1]);
+      const room = rooms[id];
+      if (!room) { json(res, 404, { error: "unknown room" }); return; }
+      if (u.searchParams.get("key") !== room.key) { json(res, 403, { error: "wrong key" }); return; }
+      const s = scenes[id];
+      if (!s) { json(res, 404, { error: "no scene" }); return; }
+      json(res, 200, { iv: s.iv, ciphertext: s.ciphertext, version: s.version, updatedAt: s.updatedAt });
+      return;
+    }
+
+    if (req.method === "POST" && sm) {
+      const MAX = 5 * 1024 * 1024;
+      if (Number(req.headers["content-length"] || 0) > MAX) {
+        req.resume();
+        json(res, 413, { error: "body too large" });
+        return;
+      }
+      let body = "", size = 0, tooBig = false;
+      req.on("data", (c) => {
+        if (tooBig) return;
+        size += c.length;
+        if (size > MAX) { tooBig = true; json(res, 413, { error: "body too large" }); return; }
+        body += c;
+      });
+      req.on("end", () => {
+        if (tooBig) return;
+        let p = {};
+        try { p = JSON.parse(body); } catch {}
+        const id = normId(sm[1]);
+        const room = rooms[id];
+        if (!room) { json(res, 404, { error: "unknown room" }); return; }
+        if (p.key !== room.key) { json(res, 403, { error: "wrong key" }); return; }
+        if (typeof p.iv !== "string" || typeof p.ciphertext !== "string" || !p.iv || !p.ciphertext) {
+          json(res, 400, { error: "iv and ciphertext required" });
+          return;
+        }
+        scenes[id] = {
+          iv: p.iv,
+          ciphertext: p.ciphertext,
+          version: typeof p.sceneVersion === "number" ? p.sceneVersion : null,
+          updatedAt: Date.now(),
+        };
+        room.hasScene = true;
+        room.lastActiveAt = Date.now();
+        saveRooms();
+        saveScenes();
+        json(res, 200, { ok: true });
+      });
       return;
     }
 

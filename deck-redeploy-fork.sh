@@ -6,7 +6,7 @@ cd "$BASE"
 
 echo "== 1/5 fresh fork clone =="
 rm -rf fork
-git clone -q fork.bundle fork -b selfhost
+git clone -q fork.bundle fork -b main
 
 echo "== 2/5 image build (yarn layers cached; src-only changes) =="
 (cd fork && sudo podman build -t excalidraw-selfhost .)
@@ -34,6 +34,9 @@ $FQDN:8443 {
   handle /api/resolve* {
     reverse_proxy localhost:3003
   }
+  handle /api/rooms* {
+    reverse_proxy localhost:3003
+  }
   handle /socket.io/* {
     reverse_proxy localhost:3002
   }
@@ -42,7 +45,6 @@ $FQDN:8443 {
   }
 }
 CDATA
-sudo podman restart excalidraw-shortcode 2>/dev/null || true
 sudo podman restart excalidraw-shortcode 2>/dev/null || true
 sudo podman restart excalidraw-caddy
 

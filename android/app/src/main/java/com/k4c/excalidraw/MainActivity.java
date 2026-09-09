@@ -114,15 +114,6 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);
     }
 
-
-    // separate named class (d8 chokes on some anonymous inner classes)
-    private class RedirectClient extends WebViewClient {
-        @Override
-        public boolean shouldOverrideUrlLoading(WebView v, String u) {
-            webView.loadUrl(u);
-            return true;
-        }
-    }
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);

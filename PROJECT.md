@@ -26,6 +26,12 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
 - **Live sync:** the forked Excalidraw connects to the room dialect on
   `wss://...:8443/socket.io/<roomID>` — one websocket per client; mirrored
   drawing happens over that (system-socket only, no autosave)
+- **My Rooms:** server-side room registry + encrypted scene snapshots in the
+  short-code service (`rooms.json` + `scenes.json` in `~/excalidraw/shortcode-data`,
+  new `/api/rooms*` endpoints). The fork auto-registers a room when it becomes
+  active and auto-saves encrypted snapshots (same cadence as the old firebase
+  path); the ShareDialog lists rooms across devices. Note: rooms created
+  before this feature appear in the list once anyone joins them again.
 
 ## The repos (both private, under github.com/knocking4thcylinder)
 
@@ -36,7 +42,7 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
        forces the `vfs` storage driver (overlay fails on `/home`'s FS)
      - Tailscale cert as user `deck` (Tailscale runs userspace, no sudo)
      - Caddyfile with `:8443` TLS and reverse-proxy routing: `/s/*`,
-       `/api/code*`, `/api/resolve*` → shortcode svc;
+       `/api/code*`, `/api/resolve*`, `/api/rooms*` → shortcode svc;
        `/socket.io/*` → room; `/` → app
      - Runtime patch of the Excalidraw JS bundle: replaces
        `https://oss-collab.excalidraw.com` with `wss://$FQDN:8443` and **verifies
@@ -55,6 +61,11 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
      code; `GET /api/resolve/<code>` returns the full room URL as JSON (used by
      the Join-room UI via `fetch`, deliberately *not* a page navigation to avoid
      service-worker interception); `GET /s/<code>` returns a 302 to the room.
+     Plus the My Rooms registry: `POST /api/rooms` (register/touch a room),
+     `GET /api/rooms` (list, most-recent first),
+     `POST /api/rooms/<roomId>/scene` + `GET /api/rooms/<roomId>/scene`
+     (save/load an encrypted snapshot), `GET /api/rooms/<roomId>/scene-history`
+     — registry in `rooms.json`, snapshots in `scenes.json`.
    - `android/build.sh`, `android/app/...` — no-gradle APK builder. Downloads
      Google `cmdline-tools` first run, compiles with `aapt2`/`javac`/`d8`
      (SDK 34, min API 21 since HarmonyOS 2.0), signs with a locally generated
@@ -68,7 +79,9 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
      room links, keep-screen-on, no cleartext traffic.
 
 2. **`excalidraw-selfhosted-fork`** — ex-`excalidraw/excalidraw` snapshot,
-   branch `main`, commits applied on top:
+   branch `main` (canonical — the local `selfhost` branch is retired; both
+   `install.sh` and the `deck-redeploy-fork.sh` flow clone `-b main` today),
+   commits applied on top:
    - `excalidraw-app/share/ShareDialog.tsx` + `.../ShareDialog.scss` — new
      "Join room" panel (accepts full link *or* short code via `/api/resolve`,
      validation, error messages), room-code display with Copy in the active
@@ -100,7 +113,7 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
 - **Steam Deck** (`steamdeck`, `100.64.0.10`) — runs the live stack; has
   passwordless `sudo podman` via `/etc/sudoers.d/deck-podman` (they ran the
   chmod). `/home/excalidraw/install.sh` matches the repo (md5 equal).
-- **Android tablet** (`tablet`, `100.64.0.12`) — Excalidraw APK v1.3
+- **Android tablet** (`tablet`, `100.64.0.12`) — Excalidraw APK v1.4
   installed (package `com.k4c.excalidraw`, UJA10 146), **wireless adb** over
   its tailnet IP `100.64.0.12:5555` (USB-cable re-plug + `adb tcpip 5555`
   needed once if the daemon resets).
@@ -117,10 +130,11 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
 
 ## Known trade-offs / gotchas worth inches if extending
 
-- **No server-side scene persistence**: a room's full scene exists only in the
-  socket (live) and in each client's browser storage. Reload == lose room if no
-  one keeps it open. Firebase/other cloud persistence was deliberately removed;
-  hosting a real persistence layer would be a new feature, not a patch.
+- **Server-side scene persistence is one encrypted snapshot per room** (the My
+  Rooms feature above) — not full history, and only for rooms registered after
+  the feature shipped. The live socket is still the realtime store. (Before
+  this: a room's scene existed only in the socket and each client's browser
+  storage; reload == lose room if no one kept it open.)
 - **Firestore size ceiling was the cause of "file too large" on big boards** —
   now gone (see fork commit `5eff2067`).
 - **Service worker was REMOVED from the fork** (commit "disable Workbox"), so
@@ -143,11 +157,10 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
 The obvious stretch goals, all in the fork or the packaging repo, roughly in
 value order:
 
-1. **Persistent scene storage on the Deck**: replace the Firestore-backed
-   `saveToFirebase` path with a small self-hosted REST endpoint (sqlite/sqlite
-   + a `contentcid ciphertext` schema, roomKey stays client-side, database never
-   sees plaintext) so sessions survive "everyone closed the tab". ~1 day of work
-   in the fork + one new container.
+1. ~~**Persistent scene storage on the Deck**~~ — **DONE** as the My Rooms
+   feature (see "What exists"): the short-code service gained `/api/rooms*`
+   endpoints storing one encrypted snapshot per room (`scenes.json`), the fork
+   auto-saves at the old firebase cadence; no new container was needed.
 2. **Client-side "Save to file" flows in the APK** — already partially done
    via blob-hook; could add an "Export PNG straight to Downloads" button using
    the same bridge (`AndroidBlobSaver.saveFile`).
