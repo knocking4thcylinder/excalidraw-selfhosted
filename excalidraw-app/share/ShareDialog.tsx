@@ -71,6 +71,33 @@ const ActiveRoomDialog = ({
   const ref = useRef<HTMLInputElement>(null);
   const isShareSupported = "share" in navigator;
   const { onCopy, copyStatus } = useCopyStatus();
+  const [roomCode, setRoomCode] = useState<string | null>(null);
+  const codeCopyRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/code", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: activeRoomLink }),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => alive && setRoomCode(d.code))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [activeRoomLink]);
+
+  const copyRoomCode = async () => {
+    if (!roomCode) return;
+    try {
+      await copyTextToSystemClipboard(roomCode);
+    } catch (e) {
+      collabAPI.setCollabError(t("errors.copyToSystemClipboardFailed"));
+    }
+    codeCopyRef.current?.select();
+  };
 
   const copyRoomLink = async () => {
     try {
@@ -146,6 +173,33 @@ const ActiveRoomDialog = ({
         />
       </div>
       <QRCode value={activeRoomLink} />
+
+      {roomCode && (
+        <div className="ShareDialog__roomCode">
+          <TextField
+            ref={codeCopyRef}
+            label={t("roomDialog.roomCode")}
+            readonly
+            fullWidth
+            value={roomCode}
+          />
+          <FilledButton
+            size="large"
+            variant="icon"
+            label={t("roomDialog.roomCodeCopyAria")}
+            icon={copyIcon}
+            onClick={copyRoomCode}
+          />
+        </div>
+      )}
+      {roomCode && (
+        <div className="ShareDialog__active__description">
+          <p className="ShareDialog__roomCodeHint">
+            {t("roomDialog.roomCodeHint")}
+          </p>
+        </div>
+      )}
+
       <div className="ShareDialog__active__description">
         <p>
           <span
@@ -274,9 +328,17 @@ const JoinRoom = ({ onJoin }: { onJoin: (linkData: { roomId: string; roomKey: st
   const [link, setLink] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const isShortCode = (s: string) => /^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{6,10}$/i.test(s.trim());
+
   const join = () => {
     if (!link.trim()) {
       setError(t("roomDialog.error_emptyLink"));
+      return;
+    }
+    // Short code (e.g. "ABCD-EFGH") — resolve via /s/<code> (server redirect
+    // lands on the app URL with the room hash, collab starts from there).
+    if (isShortCode(link)) {
+      window.location.href = window.location.origin + "/s/" + link.trim().toUpperCase();
       return;
     }
     try {

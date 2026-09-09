@@ -27,6 +27,27 @@
       }
     }
 
+    &__roomCode {
+      display: flex;
+      align-items: flex-end;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+
+    &__roomCodeHint {
+      margin: 0.25em 0 0;
+      font-size: 0.85em;
+      opacity: 0.75;
+    }
+
+    // keep the active dialog row from overflowing on narrow screens
+    &__active__linkRow {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
     &__popover {
       @keyframes ShareDialog__popover__scaleIn {
         from {
