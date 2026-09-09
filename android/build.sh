@@ -7,7 +7,7 @@ cd "$HERE"
 
 SDK_PREFIX=34              # build-tools/platform version
 SDK_ROOT="$HERE/sdk"
-BT="$SDK_ROOT/build-tools/$SDK_PREFIX.0.2"
+BT="$SDK_ROOT/build-tools/34.0.0"
 PLAT="$SDK_ROOT/platforms/android-34"
 
 # --- fetch Android SDK pieces if missing ---
@@ -21,7 +21,7 @@ if [ ! -x "$BT/aapt2" ]; then
   TOOLS="$SDK_ROOT/cmdline-tools/cmdline-tools"
   yes | "$TOOLS/bin/sdkmanager" --sdk_root="$SDK_ROOT" --licenses >/dev/null
   "$TOOLS/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platform-tools" \
-      "build-tools;$SDK_PREFIX.0.2" "platforms;android-$SDK_PREFIX" >/dev/null
+      "build-tools;34.0.0" "platforms;android-$SDK_PREFIX" >/dev/null 2>&1 || true
 fi
 
 # --- signing key (generated once, kept local) ---
@@ -46,6 +46,7 @@ javac --release 11 -classpath "$PLAT/android.jar" \
   "$OUT/src/com/k4c/excalidraw/R.java" \
   "$APP/src/main/java/com/k4c/excalidraw/MainActivity.java" \
   -d "$OUT/classes"
+mkdir -p "$OUT/dex"
 "$BT/d8" --min-api 21 $(find "$OUT/classes" -name '*.class') --output "$OUT/dex" >/dev/null
 cd "$OUT/dex" && zip -qjuX ../base.apk classes.dex && cd "$HERE"
 
