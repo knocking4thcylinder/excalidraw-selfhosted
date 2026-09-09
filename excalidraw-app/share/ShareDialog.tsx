@@ -25,6 +25,8 @@ import "./ShareDialog.scss";
 import { QRCode } from "./QRCode";
 
 import type { CollabAPI } from "../collab/Collab";
+import { getCollaborationLinkData } from "../data";
+import { APP_NAME } from "@excalidraw/common";
 
 type OnExportToBackend = () => void;
 type ShareDialogType = "share" | "collaborationOnly";
@@ -206,6 +208,29 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         />
       </div>
 
+      <div className="ShareDialog__separator">
+        <span>{t("shareDialog.or")}</span>
+      </div>
+
+      <div className="ShareDialog__picker__description">
+        {t("roomDialog.desc_joinIntro")}
+      </div>
+
+      <div className="ShareDialog__picker__button">
+        <JoinRoom
+          onJoin={(linkData) => {
+            trackEvent("share", "room join", `ui (${getFrame()})`);
+            window.history.pushState(
+              {},
+              APP_NAME,
+              `${window.location.origin}${window.location.pathname}#room=${linkData.roomId},${linkData.roomKey}`,
+            );
+            collabAPI.startCollaboration(linkData);
+            props.handleClose();
+          }}
+        />
+      </div>
+
       {props.type === "share" && (
         <div className="ShareDialog__separator">
           <span>{t("shareDialog.or")}</span>
@@ -241,6 +266,58 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         </>
       )}
     </>
+  );
+};
+
+const JoinRoom = ({ onJoin }: { onJoin: (linkData: { roomId: string; roomKey: string }) => void }) => {
+  const { t } = useI18n();
+  const [link, setLink] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const join = () => {
+    if (!link.trim()) {
+      setError(t("roomDialog.error_emptyLink"));
+      return;
+    }
+    try {
+      const linkData = getCollaborationLinkData(link.trim());
+      if (!linkData) {
+        setError(t("roomDialog.error_invalidLink"));
+        return;
+      }
+      onJoin(linkData);
+    } catch {
+      setError(t("roomDialog.error_invalidLink"));
+    }
+  };
+
+  return (
+    <div>
+      <TextField
+        label={t("roomDialog.joinLinkLabel")}
+        fullWidth
+        value={link}
+        placeholder={t("roomDialog.joinLinkPlaceholder")}
+        onChange={(value) => {
+          setLink(value);
+          setError(null);
+        }}
+        onKeyDown={(event) => event.key === KEYS.ENTER && join()}
+      />
+      {error && (
+        <div style={{ color: "#e33", fontSize: "0.85em", marginTop: "0.4em" }}>
+          {error}
+        </div>
+      )}
+      <div className="ShareDialog__picker__button">
+        <FilledButton
+          size="large"
+          label={t("roomDialog.button_joinSession")}
+          icon={LinkIcon}
+          onClick={join}
+        />
+      </div>
+    </div>
   );
 };
 
