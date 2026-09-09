@@ -149,6 +149,10 @@ export const saveFilesToFirebase = async ({
   prefix: string;
   files: { id: FileId; buffer: Uint8Array }[];
 }) => {
+  // self-hosted fork: no public firebase storage — see saveToFirebase note
+  if (import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE !== "true") {
+    return { savedFiles: [], erroredFiles: [] };
+  }
   const storage = await loadFirebaseStorage();
 
   const erroredFiles: FileId[] = [];
@@ -189,6 +193,12 @@ export const saveToFirebase = async (
   elements: readonly SyncableExcalidrawElement[],
   appState: AppState,
 ) => {
+  // self-hosted fork: no public firebase — the collab room socket is the
+  // source of truth. Firestore snapshots from the OSS build hit the 1 MB doc
+  // limit on large boards and produced misleading "file too large" dialogs.
+  if (import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE !== "true") {
+    return null;
+  }
   const { roomId, roomKey, socket } = portal;
   if (
     // bail if no room exists as there's nothing we can do at this point
