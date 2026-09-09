@@ -1,27 +1,29 @@
 #!/bin/bash
-# Restores tailnet routes shadowed by proxy/TUN apps (Happ/Xray etc.)
-# Idempotent: only adds routes that are missing or misrouted.
+# Assert /32 routes for every peer in `tailscale status`, keeping them pointed
+# at the current tailscale utun interface. /32 host routes are the most specific
+# possible, so no proxy/TUN app (Happ, Xray, etc.) can shadow them.
+# Runs as root from LaunchDaemon (com.fixtsroutes.plist, every 20s).
 
 LOG="/var/log/ts_routes_fix.log"
 ts() { date "+%F %T"; }
 log() { echo "$(ts) $*" >> "$LOG" 2>/dev/null; }
 
-# Discover the tailscale utun interface robustly: it's the interface that a
-# /32 route to our own tailnet IP (100.89.x) resolves through.
+# 1. tailscale utun interface = whatever the /32 route to our own tailnet IP goes through
 TAILSCALE_IF=$(route -n get 100.64.0.11 2>/dev/null | awk '/interface:/{print $2}')
 if [ -z "$TAILSCALE_IF" ]; then
-  log "no tailscale interface (route to own tailnet IP unresolved) — skipping"
-  exit 0
+  exit 0   # tailscale not up yet; silent
 fi
 
-# 1. whole-CGNAT route to the tailscale utun (fixes 100.64/10 → en0 shadowing)
-CURRENT_IF=$(route -n get 100.64.0.10 2>/dev/null | awk '/interface:/{print $2}')
-if [ "$CURRENT_IF" = "$TAILSCALE_IF" ]; then
-  exit 0   # already correct, silent no-op
-fi
+# 2. every peer IP currently known
+PEERS=$(tailscale status 2>/dev/null | awk '$1 ~ /^100\./ && $1 != "100.64.0.11" {print $1}')
+[ -z "$PEERS" ] && exit 0
 
-route -n delete -net 100.64.0.0/10 >/dev/null 2>&1
-route add -net 100.64.0.0/10 -interface "$TAILSCALE_IF" >/dev/null 2>&1
-
-CUR_AFTER=$(route -n get 100.64.0.10 2>/dev/null | awk '/interface:/{print $2}')
-log "route 100.64/10 was '$CURRENT_IF', re-added via '$TAILSCALE_IF'; now: '$CUR_AFTER'"
+for IP in $PEERS; do
+  CUR_IF=$(route -n get "$IP" 2>/dev/null | awk '/interface:/{print $2}')
+  [ "$CUR_IF" = "$TAILSCALE_IF" ] && continue
+  route -n delete -host "$IP" >/dev/null 2>&1
+  route add -host "$IP" -interface "$TAILSCALE_IF" >/dev/null 2>&1
+  AFT_IF=$(route -n get "$IP" 2>/dev/null | awk '/interface:/{print $2}')
+  log "peer route $IP was '$CUR_IF' → re-added via '$TAILSCALE_IF' (now: '$AFT_IF')"
+done
+exit 0
