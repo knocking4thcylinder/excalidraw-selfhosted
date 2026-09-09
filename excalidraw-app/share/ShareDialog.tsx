@@ -330,16 +330,36 @@ const JoinRoom = ({ onJoin }: { onJoin: (linkData: { roomId: string; roomKey: st
 
   const isShortCode = (s: string) => /^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{6,10}$/i.test(s.trim());
 
-  const join = () => {
+  const join = async () => {
     if (!link.trim()) {
       setError(t("roomDialog.error_emptyLink"));
       return;
     }
-    // Short code (e.g. "ABCD-EFGH") — resolve via /s/<code> (server redirect
-    // lands on the app URL with the room hash, collab starts from there).
+    // Short code (e.g. "ABCD-EFGH") — resolve via /api/resolve (a fetch, NOT a
+    // page navigation: the service worker would swallow a navigation-based
+    // redirect and land on a blank canvas).
     if (isShortCode(link)) {
-      window.location.href = window.location.origin + "/s/" + link.trim().toUpperCase();
-      return;
+      try {
+        const resp = await fetch(
+          `${window.location.origin}/api/resolve/${link.trim().toUpperCase()}`,
+          { cache: "no-store" },
+        );
+        if (!resp.ok) {
+          setError(t("roomDialog.error_unknownCode"));
+          return;
+        }
+        const data = await resp.json();
+        const linkData = getCollaborationLinkData(data.url);
+        if (!linkData) {
+          setError(t("roomDialog.error_invalidLink"));
+          return;
+        }
+        onJoin(linkData);
+        return;
+      } catch {
+        setError(t("roomDialog.error_network"));
+        return;
+      }
     }
     try {
       const linkData = getCollaborationLinkData(link.trim());

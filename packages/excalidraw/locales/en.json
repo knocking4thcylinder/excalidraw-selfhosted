@@ -424,6 +424,8 @@
     "joinLinkPlaceholder": "https://…#room=…  or  ABCD-EFGH",
     "error_emptyLink": "Please paste a room link or code first.",
     "error_invalidLink": "That doesn't look like a valid room link or code.",
+    "error_unknownCode": "Unknown room code — check for typos or ask for a new one.",
+    "error_network": "Couldn't reach the room server. Check your connection.",
     "roomCode": "Room code",
     "roomCodeCopyAria": "Copy room code",
     "roomCodeHint": "Instead of the full link, type this short code via “Join room” on the other device.",
