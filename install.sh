@@ -29,8 +29,21 @@ if [ -d /var/lib/containers/storage ] && grep -q 'graphroot = "/home/containers/
 fi
 
 BASE="$HOME/excalidraw"
-mkdir -p "$BASE/certs"
+mkdir -p "$BASE/certs" "$BASE/shortcode-data"
 cd "$BASE"
+
+# 0d. shortcode service source (same directory as this script: Shortcode/server.js;
+#     or as a file: shortcode-server.js)
+if [ ! -f "$BASE/shortcode-server.js" ]; then
+  HERE="$(cd "$(dirname "$0")" && pwd)"
+  if [ -f "$HERE/shortcode/server.js" ]; then
+    cp "$HERE/shortcode/server.js" "$BASE/shortcode-server.js"
+  elif [ -f "$HERE/shortcode-server.js" ]; then
+    cp "$HERE/shortcode-server.js" "$BASE/shortcode-server.js"
+  else
+    echo "WARN: shortcode/server.js not found next to install.sh — shortcode service will be skipped"
+  fi
+fi
 
 # 0c. writable rootfs is required for /etc/systemd/system units and /etc/containers/storage.conf
 if [ ! -w /etc/systemd/system ]; then
@@ -95,8 +108,15 @@ sudo podman run -d --name excalidraw-caddy --restart always --network host \
   -v "$BASE/certs:/certs:ro" \
   docker.io/library/caddy:2-alpine
 
+sudo podman run -d --name excalidraw-shortcode --restart always --network host \
+  -e PORT=3003 \
+  -v "$BASE/shortcode-data:/data" \
+  -v "$BASE/shortcode-server.js:/srv/server.js:ro" \
+  docker.io/library/node:20-alpine node /srv/server.js 2>/dev/null || \
+echo "  shortcode skipped (server.js missing)"
+
 # 4. systemd system units (root podman)
-for SVC in excalidraw-room excalidraw excalidraw-caddy; do
+for SVC in excalidraw-room excalidraw excalidraw-caddy excalidraw-shortcode; do
   printf '%s\n' \
 "[Unit]" \
 "Description=Excalidraw $SVC" \
@@ -114,7 +134,7 @@ done
 # ensure caddy starts after app (nice, not strictly needed)
 sudo sed -i 's/^After=network-online.target$/After=network-online.target excalidraw.service/' /etc/systemd/system/excalidraw-caddy.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now excalidraw-room.service excalidraw.service excalidraw-caddy.service
+sudo systemctl enable --now excalidraw-room.service excalidraw.service excalidraw-caddy.service excalidraw-shortcode.service
 
 # 5. reinstall.sh for post-OS-update recovery — just re-run this installer (idempotent)
 cat > "$BASE/reinstall.sh" <<'REEOF'
