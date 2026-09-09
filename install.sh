@@ -33,10 +33,18 @@ mkdir -p "$BASE/certs"
 cd "$BASE"
 
 # 0c. writable rootfs is required for /etc/systemd/system units and /etc/containers/storage.conf
-if [ ! -f /etc/systemd/system/.ro-done ] && ! [ -w /etc/systemd/system ]; then
+if [ ! -w /etc/systemd/system ]; then
   echo "run: sudo steamos-readonly disable   (once, before this script)"
   exit 1
 fi
+
+# 0f. clone fork (with the in-app Join-room UI) and build the image on the Deck
+FORK_URL="https://github.com/knocking4thcylinder/excalidraw-selfhosted-fork.git"
+IMAGE="excalidraw-selfhost"
+if [ ! -d "$BASE/fork" ]; then
+  git clone --depth 1 -b main "$FORK_URL" "$BASE/fork"
+fi
+(cd "$BASE/fork" && sudo podman build -t "$IMAGE" .)
 
 # 1. tailscale cert (as deck user, userspace daemon)
 cd "$BASE/certs"
@@ -66,7 +74,7 @@ sudo podman run -d --name excalidraw-room --restart always --network host \
 
 sudo podman run -d --name excalidraw --restart always --network host \
   -e FQDN_HOST="$FQDN" \
-  docker.io/excalidraw/excalidraw:latest \
+  "$IMAGE" \
   sh -c 'find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\1/" {} + && \
     find /usr/share/nginx/html/assets -name "*.js" -exec \
       sed -i -e "s|https://oss-collab\.excalidraw\.com|wss://$FQDN_HOST:8443|g" \
@@ -101,32 +109,11 @@ sudo sed -i 's/^After=network-online.target$/After=network-online.target excalid
 sudo systemctl daemon-reload
 sudo systemctl enable --now excalidraw-room.service excalidraw.service excalidraw-caddy.service
 
-# 5. reinstall.sh for post-OS-update recovery
+# 5. reinstall.sh for post-OS-update recovery — just re-run this installer (idempotent)
 cat > "$BASE/reinstall.sh" <<'REEOF'
 #!/bin/bash
 set -euo pipefail
-cd "$HOME/excalidraw"
-FQDN=$(tailscale status --json | sed -n 's/.*"DNSName": *"steamdeck\([^"]*\)\.ts\.net\.".*/steamdeck\1.ts.net/p' | head -1)
-cd certs
-tailscale cert "$FQDN"
-chmod a+r "$FQDN".crt "$FQDN".key
-cd ..
-sudo podman rm -f excalidraw excalidraw-room excalidraw-caddy 2>/dev/null || true
-sudo podman run -d --name excalidraw-room --restart always --network host \
-  -e PORT=3002 docker.io/excalidraw/excalidraw-room:latest
-sudo podman run -d --name excalidraw --restart always --network host \
-  -e FQDN_HOST="$FQDN" \
-  docker.io/excalidraw/excalidraw:latest \
-  sh -c 'find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\1/" {} + && \
-    find /usr/share/nginx/html/assets -name "*.js" -exec \
-      sed -i -e "s|https://oss-collab\.excalidraw\.com|wss://$FQDN_HOST:8443|g" \
-             -e "s|wss://oss-collab\.excalidraw\.com|wss://$FQDN_HOST:8443|g" {} + && \
-    nginx -g "daemon off;"'
-sudo podman run -d --name excalidraw-caddy --restart always --network host \
-  -v "$HOME/excalidraw/Caddyfile:/etc/caddy/Caddyfile:ro" \
-  -v "$HOME/excalidraw/certs:/certs:ro" \
-  docker.io/library/caddy:2-alpine
-echo "reinstall done: https://$FQDN:8443"
+"$(cd "$(dirname "$0")" && pwd)/install.sh"
 REEOF
 chmod +x "$BASE/reinstall.sh"
 
