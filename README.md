@@ -1,76 +1,88 @@
 # Excalidraw self-hosted: Steam Deck + Android tablet + MacBook
 
-Self-hosted collaborative whiteboard stack. Excalidraw (app + collab room) runs on
-a Steam Deck under podman, exposed over HTTPS on the tailnet via a Tailscale-issued
-certificate; an Android WebView app (HarmonyOS-compatible) wraps the tablet side;
-Mac-side network fixes make Tailscale coexist with proxy/TUN apps.
+Self-hosted collaborative whiteboard. **Excalidraw (app + collab room) runs on a
+Steam Deck** under podman; all devices reach it over the tailnet via HTTPS
+(Tailscale-issued cert). Room sharing supports a **short code** (e.g. `7QU6-38SK`)
+in addition to the full link; the Join-room UI and all new strings ship inside the
+[forked Excalidraw build](https://github.com/knocking4thcylinder/excalidraw-selfhosted-fork).
 
-Result: draw with a stylus on the Android tablet, live mirror on any device in the
-tailnet. No external services.
+Draw with a stylus on the Android tablet, mirrored live on any device in the tailnet.
 
+```mermaid
+%%{init:{"theme":"dark"}}%%
+graph LR
+  T[Android tablet<br/>APK wrapper, stylus] -- "per-app VPN, wss" --> D((Steam Deck))
+  M[MacBook] -- "route fixer + hosts entry" --> D
+  subgraph D [Steam Deck]
+    C[Caddy :8443 TLS]
+    A[excalidraw-selfhost :3000]
+    R[excalidraw-room :3002]
+    S[shortcode svc :3003]
+  end
+  C --> A; C --> R; C --> S
 ```
-                 tailnet (wireguard)
-  Android tablet ────────────────► Steam Deck ──── Caddy :8443
-   (APK wrapper, stylus)              │                │
-                                      │                │ /socket.io/* → excalidraw-room :3002
-   MacBook ───────────────────────────┘──► (mirror)     └─ anything else → app :3000
-```
 
-## Components
+## Layout of this repo
 
-| Path | What |
+| Path | Purpose |
 |---|---|
-| `install.sh` | Full Deck installer: storage setup (vfs on `/home`), Tailscale cert, Caddy TLS proxy, app + room containers, systemd units, patch-the-bundle tripwire, `reinstall.sh` for post-OS-update recovery |
-| `mac/` | Mac-side: persistent route fixer LaunchDaemon (kept Tailscale alive under proxy/TUN apps like Happ) + `/etc/hosts` entry |
-| `android/` | WebView APK source + reproducible build script (fetches Android SDK cmdline-tools, builds + signs) |
+| `install.sh` | **Deck**: full canonical installer — storage (vfs on `/home`), Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
+| `shortcode/server.js` | tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes) |
+| `mac/install-mac.sh` | Mac: installs the LaunchDaemon route fixer + `/etc/hosts` entry (interactive prompt for the Deck FQDN / tailnet IP) |
+| `mac/fix_ts_routes.sh` | asserts a `/32` route per tailnet peer every 20 s (beats proxy/TUN apps like Happ) |
+| `mac/com.fixtsroutes.plist` | LaunchDaemon definition (`user.fixtsroutes`) |
+| `android/build.sh` | reproducible APK build: fetches Google `cmdline-tools` on first run, compiles with `aapt2`/`javac`/`d8`, signs with a locally generated keystore |
+| `android/app/...` | fullscreen WebView (minSdk 21 — HarmonyOS 2.0 works), INTERNET only, keeps screen on, VIEW-intent for room links, remembers last URL |
 
-## Deck setup (one-time)
+## URLs
+
+| From | URL |
+|---|---|
+| Anywhere on the tailnet | `https://steamdeck.example.ts.net:8443` |
+| Room share | full link *or* short code — created via **Live Collaboration → Start session**, code shown in the dialog |
+
+## Setup, one command per device
 
 ```bash
-sudo steamos-readonly disable   # once
+# Deck (once: sudo steamos-readonly disable)
 ./install.sh
+
+# Mac (needs sudo)
+sudo ./mac/install-mac.sh
+
+# Android
+cd android && ./build.sh
+adb install -r build/Excalidraw.apk
 ```
 
-Reproducible after a SteamOS update wipes container state:
+Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555` →
+`adb connect <tablet-tailnet-ip>:5555` → unplug forever (works over the tailnet).
 
-```bash
-~/excalidraw/reinstall.sh
-```
+## Reproduction notes (things that cost us hours — don't re-learn them)
 
-URL: `https://<this-host>.<tailnet>.ts.net:8443`
+- **SteamOS `/var` is a 230 MB partition** — podman's root store must live on `/home`;
+  the `overlay` driver fails on `/home`'s FS here → installer sets **vfs** on
+  `/home/containers/storage` and frees the old `/var/lib/containers` store
+- **`crypto.subtle` needs a secure origin** — plain-IP `http://` silently breaks
+  "Start session" (no exception surfaces); hence HTTPS everywhere
+- **Excalidraw's collab URL is baked into the built JS bundle** — the installer
+  patches it to `wss://<fqdn>:8443` and verifies by grepping for *zero* remaining
+  `oss-collab.excalidraw.com` references before starting nginx
+- **Service-worker cache** serves stale bundles after any re-patch — clients need
+  one hard-reload / SW unregister per origin
+- **Caddy path matchers**: `/api/code/*` does not match a bare `/api/code` request —
+  hence the `*` without slash in this repo's Caddyfile
+- **Single-file bind mounts**: `sed -i` inside the Caddy container fails with
+  "Resource busy" (temp-file rename); edit the host file and restart the container
+- **proxy/TUN apps on the Mac (Happ etc.)** hijack `100.64/10` and DNS — the
+  per-peer `/32` route daemon + hosts entry neutralize both
+- Rooms are E2E-encrypted; the short-code map trades a bit of that
+  (it stores room keys server-side) for shorter links — delete
+  `shortcode-data/codes.json` at any time to revoke
 
-## Android app
+## Updating Excalidraw itself
 
-```bash
-cd android && ./build.sh   # installs cmdline-tools locally on first run, builds signed APK
-adb install build/Excalidraw.apk    # or copy to tablet and tap it
-```
-
-Requirements on the tablet: Tailscale app signed in to the tailnet (for the tailnet
-route + the Tailscale CA that validates the `ts.net` certificate). Minimum Android/Arc:
-HarmonyOS 2.0 was verified.
-
-## MacBook setup
-
-```bash
-cd mac && sudo ./install-mac.sh
-```
-
-Installs LaunchDaemon `user.fixtsroutes` (re-asserts a `100.64/10` route through the
-Tailscale utun interface every 20 s — defeats proxy/TUN-app route shadowing) and the
-`/etc/hosts` entry mapping `steamdeck.example.ts.net` to the Deck's tailnet IP
-(defeats DNS hijacking by TUN apps).
-
-## Why pieces exist (gotchas that cost us hours)
-
-- **SteamOS `/var` is a 230 MB partition** — podman's root store must live on `/home`
-- **`overlay` storage driver fails on `/home`'s FS on this hardware** — use `vfs`
-- **webcrypto (`crypto.subtle`) needs a secure origin** — plain-IP `http://` silently
-  breaks "Start session"; hence the Tailscale cert + HTTPS everywhere
-- **Excalidraw's collab URL is baked into the JS bundle** — the installer patches every
-  bundle URL to `wss://<fqdn>:8443` and *verifies* by grepping for zero remaining
-  `oss-collab.excalidraw.com` references
-- **Service-worker cache** — after re-patching, clients must hard-reload / unregister
-  the service worker once, otherwise they serve the stale bundle
-- **proxy/TUN apps on the Mac (Happ etc.) hijack routes and DNS** — hence the daemon +
-  hosts entry
+The app image is built from the fork (`excalidraw-selfhosted-fork`, branch `main`).
+To roll changes: commit to the fork, then on the Deck either re-run `install.sh`
+(fresh image build) or provide an updated `fork.bundle` next to it
+(`git bundle create fork.bundle main`) and re-run `install.sh`.
