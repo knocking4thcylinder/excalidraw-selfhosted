@@ -38,11 +38,18 @@ if [ ! -w /etc/systemd/system ]; then
   exit 1
 fi
 
-# 0f. clone fork (with the in-app Join-room UI) and build the image on the Deck
+# 0f. clone fork (with the in-app Join-room UI) and build the image on the Deck.
+#     auth note: the fork repo is private, so plain HTTPS clone works only if auth
+#     is configured on this machine — otherwise provide fork.bundle next to this
+#     script (create on another machine with: git bundle create fork.bundle main)
 FORK_URL="https://github.com/knocking4thcylinder/excalidraw-selfhosted-fork.git"
 IMAGE="excalidraw-selfhost"
 if [ ! -d "$BASE/fork" ]; then
-  git clone --depth 1 -b main "$FORK_URL" "$BASE/fork"
+  if [ -f "$BASE/fork.bundle" ]; then
+    git clone -q "$BASE/fork.bundle" "$BASE/fork" -b main
+  else
+    git clone -q -b main "$FORK_URL" "$BASE/fork"
+  fi
 fi
 (cd "$BASE/fork" && sudo podman build -t "$IMAGE" .)
 
