@@ -7,7 +7,7 @@ cd "$HERE"
 
 SDK_PREFIX=34              # build-tools/platform version
 SDK_ROOT="$HERE/sdk"
-BT="$SDK_ROOT/build-tools/34.0.0"
+BT="$SDK_ROOT/build-tools/35.0.0"
 PLAT="$SDK_ROOT/platforms/android-34"
 
 # --- fetch Android SDK pieces if missing ---
@@ -42,12 +42,23 @@ echo "== compile =="
   --min-sdk-version 21 --target-sdk-version 34 \
   --manifest "$APP/src/main/AndroidManifest.xml" \
   -I "$PLAT/android.jar" "$OUT/res.zip" --java "$OUT/src"
-javac --release 11 -classpath "$PLAT/android.jar" \
+javac --release 8 -classpath "$PLAT/android.jar" \
   "$OUT/src/com/k4c/excalidraw/R.java" \
   "$APP/src/main/java/com/k4c/excalidraw/MainActivity.java" \
+  "$APP/src/main/java/com/k4c/excalidraw/BlobSaver.java" \
   -d "$OUT/classes"
 mkdir -p "$OUT/dex"
-"$BT/d8" --min-api 21 $(find "$OUT/classes" -name '*.class') --output "$OUT/dex" >/dev/null
+cd "$OUT/classes" && zip -qr ../classes.jar . && cd "$HERE"
+# primary: d8; fallback: dx from build-tools 30.0.3 (d8 8.2.2-dev has an NPE bug on
+# classes carrying the NestHost attribute — dexer-level, not a code problem)
+if ! "$BT/d8" --min-api 21 "$OUT/classes.jar" --output "$OUT/dex" >/dev/null 2>>/tmp/d8err.log; then
+  echo "== d8 failed (see /tmp/d8err.log), falling back to dx =="
+  if [ ! -x "$SDK_ROOT/build-tools/30.0.3/dx" ]; then
+    "$SDK_ROOT/cmdline-tools/cmdline-tools/bin/sdkmanager" --sdk_root="$SDK_ROOT" "build-tools;30.0.3" >/dev/null 2>&1
+  fi
+  "$SDK_ROOT/build-tools/30.0.3/dx" --min-sdk-version=21 --dex \
+    --output="$OUT/dex/classes.dex" "$OUT/classes.jar"
+fi
 cd "$OUT/dex" && zip -qjuX ../base.apk classes.dex && cd "$HERE"
 
 echo "== sign =="
