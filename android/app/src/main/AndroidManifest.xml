@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.k4c.excalidraw"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <!-- HarmonyOS 2.0 is Android 10 (API 29); minSdk 21 covers older too -->
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="34"/>
+
+    <!-- HTTPS only -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <application
+        android:label="Excalidraw"
+        android:icon="@drawable/ic_launcher"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+        android:usesCleartextTraffic="false">
+
+        <activity android:name=".MainActivity"
+                  android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
