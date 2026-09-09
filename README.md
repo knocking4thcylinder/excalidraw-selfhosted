@@ -68,8 +68,9 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
 - **Excalidraw's collab URL is baked into the built JS bundle** — the installer
   patches it to `wss://<fqdn>:8443` and verifies by grepping for *zero* remaining
   `oss-collab.excalidraw.com` references before starting nginx
-- **Service-worker cache** serves stale bundles after any re-patch — clients need
-  one hard-reload / SW unregister per origin
+- **Service worker removed in the fork** (Workbox/PWA plugin disabled): redeploys
+  now reach clients as plain network loads — no unregister/hard-reload dance.
+  Trade-off: no offline cached app shell — acceptable for tailnet use
 - **Caddy path matchers**: `/api/code/*` does not match a bare `/api/code` request —
   hence the `*` without slash in this repo's Caddyfile
 - **Single-file bind mounts**: `sed -i` inside the Caddy container fails with

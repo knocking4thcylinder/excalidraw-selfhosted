@@ -73,6 +73,14 @@ http
       return;
     }
 
+    const r = u.pathname.match(/^\/api\/resolve\/([A-Za-z0-9-]{4,12})$/i);
+    if (req.method === "GET" && r) {
+      const url = codes[r[1].toUpperCase()];
+      res.writeHead(url ? 200 : 404, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(url ? { url } : { error: "unknown code" }));
+      return;
+    }
+
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("short code service is running");
   })
