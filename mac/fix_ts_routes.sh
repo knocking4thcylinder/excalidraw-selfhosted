@@ -22,8 +22,8 @@ for IP in $PEERS; do
   CUR_IF=$(route -n get "$IP" 2>/dev/null | awk '/interface:/{print $2}')
   [ "$CUR_IF" = "$TAILSCALE_IF" ] && continue
   route -n delete -host "$IP" >/dev/null 2>&1
-  route add -host "$IP" -interface "$TAILSCALE_IF" >/dev/null 2>&1
+  OUT=$(route add -host "$IP" -interface "$TAILSCALE_IF" 2>&1) || true
   AFT_IF=$(route -n get "$IP" 2>/dev/null | awk '/interface:/{print $2}')
-  log "peer route $IP was '$CUR_IF' → re-added via '$TAILSCALE_IF' (now: '$AFT_IF')"
+  log "peer $IP was '$CUR_IF' → route add: [$OUT] (now: '$AFT_IF')"
 done
 exit 0
