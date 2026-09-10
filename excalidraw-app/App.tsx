@@ -571,10 +571,13 @@ const ExcalidrawWrapper = () => {
       event.preventDefault();
       const libraryUrlTokens = parseLibraryTokensFromUrl();
       if (!libraryUrlTokens) {
-        if (
-          collabAPI?.isCollaborating() &&
-          !isCollaborationLink(window.location.href)
-        ) {
+        // Tear down the old socket even when the target is another
+        // collaboration room: startCollaboration() early-returns while a
+        // socket exists, so without this, room A -> room B is a no-op and
+        // the user must manually stop the session first. `false` skips the
+        // confirm dialog (no history push), initializeScene() below starts
+        // the new room.
+        if (collabAPI?.isCollaborating()) {
           collabAPI.stopCollaboration(false);
         }
         excalidrawAPI.updateScene({ appState: { isLoading: true } });

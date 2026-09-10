@@ -228,7 +228,7 @@ const ActiveRoomDialog = ({
         <span>{t("myRooms.title")}</span>
       </div>
 
-      <MyRooms />
+      <MyRooms onNavigate={handleClose} />
 
       <div className="ShareDialog__active__actions">
         <FilledButton
@@ -305,7 +305,7 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         <span>{t("myRooms.title")}</span>
       </div>
 
-      <MyRooms />
+      <MyRooms onNavigate={props.handleClose} />
 
       {props.type === "share" && (
         <div className="ShareDialog__separator">
@@ -430,7 +430,7 @@ const JoinRoom = ({
   );
 };
 
-const MyRooms = () => {
+const MyRooms = ({ onNavigate }: { onNavigate?: () => void }) => {
   const { t } = useI18n();
   const { container } = useExcalidrawContainer();
   const [rooms, setRooms] = useState<ServerRoomEntry[] | null>(null);
@@ -535,6 +535,7 @@ const MyRooms = () => {
                 return;
               }
               switchRoom(room);
+              onNavigate?.();
             }}
           >
             {isEditing ? (
