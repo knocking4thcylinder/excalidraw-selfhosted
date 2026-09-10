@@ -216,6 +216,8 @@ export const saveRoomToServer = async (
         iv: toBase64(iv),
         ciphertext: toBase64(encryptedBuffer),
         sceneVersion: getSceneVersion(elements),
+        // lets the server enforce its no-empty-overwrite invariant
+        isEmpty: elements.length === 0,
       }),
     });
 
