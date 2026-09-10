@@ -6,16 +6,14 @@ import { TextField } from "@excalidraw/excalidraw/components/TextField";
 import {
   copyIcon,
   LinkIcon,
-  pencilIcon,
   playerPlayIcon,
   playerStopFilledIcon,
   share,
   shareIOS,
   shareWindows,
-  TrashIcon,
+  usersIcon,
 } from "@excalidraw/excalidraw/components/icons";
 import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
-import { useExcalidrawContainer } from "@excalidraw/excalidraw/components/App";
 import { useCopyStatus } from "@excalidraw/excalidraw/hooks/useCopiedIndicator";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { APP_NAME, KEYS, getFrame } from "@excalidraw/common";
@@ -23,15 +21,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { atom, useAtom, useAtomValue } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
-import { getCollaborationLinkData } from "../data";
-import {
-  deleteRoom,
-  fetchRooms,
-  renameRoom,
-  type ServerRoomEntry,
-} from "../data/rooms";
+import { openRoomsPage } from "../rooms/roomsRoute";
 
 import "./ShareDialog.scss";
+import { JoinRoom } from "./JoinRoom";
 import { QRCode } from "./QRCode";
 
 import type { CollabAPI } from "../collab/Collab";
@@ -224,13 +217,20 @@ const ActiveRoomDialog = ({
         <p>{t("roomDialog.desc_exitSession")}</p>
       </div>
 
-      <div className="ShareDialog__separator">
-        <span>{t("myRooms.title")}</span>
-      </div>
-
-      <MyRooms onNavigate={handleClose} />
-
       <div className="ShareDialog__active__actions">
+        <FilledButton
+          size="large"
+          label={t("myRooms.exitRoom")}
+          icon={usersIcon}
+          onClick={() => {
+            trackEvent("share", "room exited to list");
+            // silent teardown (no confirm): the user explicitly asked to
+            // leave, and the Rooms page is the destination, not bare canvas.
+            collabAPI.stopCollaboration(false);
+            openRoomsPage(window);
+            handleClose();
+          }}
+        />
         <FilledButton
           size="large"
           variant="outlined"
@@ -305,7 +305,18 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         <span>{t("myRooms.title")}</span>
       </div>
 
-      <MyRooms onNavigate={props.handleClose} />
+      <div className="ShareDialog__picker__button">
+        <FilledButton
+          size="large"
+          variant="outlined"
+          label={t("myRooms.title")}
+          icon={usersIcon}
+          onClick={() => {
+            openRoomsPage(window);
+            props.handleClose();
+          }}
+        />
+      </div>
 
       {props.type === "share" && (
         <div className="ShareDialog__separator">
@@ -342,280 +353,6 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         </>
       )}
     </>
-  );
-};
-
-const JoinRoom = ({
-  onJoin,
-}: {
-  onJoin: (linkData: { roomId: string; roomKey: string }) => void;
-}) => {
-  const { t } = useI18n();
-  const [link, setLink] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const isShortCode = (s: string) =>
-    /^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{6,10}$/i.test(s.trim());
-
-  const join = async () => {
-    if (!link.trim()) {
-      setError(t("roomDialog.error_emptyLink"));
-      return;
-    }
-    // Short code (e.g. "ABCD-EFGH") — resolve via /api/resolve (a fetch, NOT a
-    // page navigation: the service worker would swallow a navigation-based
-    // redirect and land on a blank canvas).
-    if (isShortCode(link)) {
-      try {
-        const resp = await fetch(
-          `${window.location.origin}/api/resolve/${link.trim().toUpperCase()}`,
-          { cache: "no-store" },
-        );
-        if (!resp.ok) {
-          setError(t("roomDialog.error_unknownCode"));
-          return;
-        }
-        const data = await resp.json();
-        const linkData = getCollaborationLinkData(data.url);
-        if (!linkData) {
-          setError(t("roomDialog.error_invalidLink"));
-          return;
-        }
-        onJoin(linkData);
-        return;
-      } catch {
-        setError(t("roomDialog.error_network"));
-        return;
-      }
-    }
-    try {
-      const linkData = getCollaborationLinkData(link.trim());
-      if (!linkData) {
-        setError(t("roomDialog.error_invalidLink"));
-        return;
-      }
-      onJoin(linkData);
-    } catch {
-      setError(t("roomDialog.error_invalidLink"));
-    }
-  };
-
-  return (
-    <div>
-      <TextField
-        label={t("roomDialog.joinLinkLabel")}
-        fullWidth
-        value={link}
-        placeholder={t("roomDialog.joinLinkPlaceholder")}
-        onChange={(value) => {
-          setLink(value);
-          setError(null);
-        }}
-        onKeyDown={(event) => event.key === KEYS.ENTER && join()}
-      />
-      {error && (
-        <div style={{ color: "#e33", fontSize: "0.85em", marginTop: "0.4em" }}>
-          {error}
-        </div>
-      )}
-      <div className="ShareDialog__picker__button">
-        <FilledButton
-          size="large"
-          label={t("roomDialog.button_joinSession")}
-          icon={LinkIcon}
-          onClick={join}
-        />
-      </div>
-    </div>
-  );
-};
-
-const MyRooms = ({ onNavigate }: { onNavigate?: () => void }) => {
-  const { t } = useI18n();
-  const { container } = useExcalidrawContainer();
-  const [rooms, setRooms] = useState<ServerRoomEntry[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  // rename/delete (feature v2): at most one row in edit mode and one row with
-  // an armed (confirm) delete button at a time
-  const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
-  const [confirmingDeleteRoomId, setConfirmingDeleteRoomId] = useState<
-    string | null
-  >(null);
-  const switchRoom = (room: ServerRoomEntry) => {
-    const link = `${ownerWindow.location.origin}${ownerWindow.location.pathname}#room=${room.roomId},${room.key}`;
-    ownerWindow.location.href = link;
-  };
-
-  // the dialog unmounts when closed, so mounting == dialog opened
-  useEffect(() => {
-    let alive = true;
-    fetchRooms().then((result) => {
-      if (!alive) {
-        return;
-      }
-      setRooms(result);
-      setLoading(false);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const refreshRooms = async () => {
-    setRooms(await fetchRooms());
-  };
-
-  const submitRename = async (room: ServerRoomEntry, value: string) => {
-    setEditingRoomId(null);
-    if (await renameRoom(room.roomId, room.key, value.trim())) {
-      refreshRooms();
-    } else {
-      console.error(t("myRooms.renameError"));
-    }
-  };
-
-  const confirmDelete = async (room: ServerRoomEntry) => {
-    setConfirmingDeleteRoomId(null);
-    if (await deleteRoom(room.roomId, room.key)) {
-      refreshRooms();
-    } else {
-      console.error(t("myRooms.deleteError"));
-    }
-  };
-
-  const ownerWindow = container?.ownerDocument.defaultView ?? window;
-  const currentRoom = getCollaborationLinkData(ownerWindow.location.href);
-
-  const formatLastActive = (timestamp: number) => {
-    const minutes = Math.floor((Date.now() - timestamp) / 60000);
-    if (minutes < 1) {
-      return t("myRooms.timeAgo.justNow");
-    }
-    if (minutes < 60) {
-      return t("myRooms.timeAgo.minutes", { count: minutes });
-    }
-    const hours = Math.floor(minutes / 60);
-    if (hours < 48) {
-      return t("myRooms.timeAgo.hours", { count: hours });
-    }
-    return t("myRooms.timeAgo.days", { count: Math.floor(hours / 24) });
-  };
-
-  if (loading) {
-    return <div className="ShareDialog__myRoomsEmpty">…</div>;
-  }
-  if (rooms === null) {
-    return (
-      <div className="ShareDialog__myRoomsError">
-        {t("myRooms.loadingError")}
-      </div>
-    );
-  }
-  if (rooms.length === 0) {
-    return (
-      <div className="ShareDialog__myRoomsEmpty">{t("myRooms.empty")}</div>
-    );
-  }
-
-  return (
-    <div className="ShareDialog__myRoomsList">
-      {rooms.map((room) => {
-        const isActive = currentRoom?.roomId === room.roomId;
-        const isEditing = editingRoomId === room.roomId;
-        const isConfirmingDelete = confirmingDeleteRoomId === room.roomId;
-        return (
-          <div
-            key={room.roomId}
-            title={room.roomId}
-            className={`ShareDialog__myRoomsRow${
-              isActive ? " ShareDialog__myRoomsRow--active" : ""
-            }`}
-            onClick={() => {
-              if (isActive || isEditing) {
-                return;
-              }
-              switchRoom(room);
-              onNavigate?.();
-            }}
-          >
-            {isEditing ? (
-              <input
-                className="ShareDialog__myRoomsRowEditInput"
-                defaultValue={room.name ?? ""}
-                placeholder={t("myRooms.renamePlaceholder")}
-                autoFocus
-                onClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => {
-                  if (event.key === KEYS.ENTER) {
-                    submitRename(room, event.currentTarget.value);
-                  } else if (event.key === KEYS.ESCAPE) {
-                    setEditingRoomId(null);
-                  }
-                }}
-                onBlur={(event) => submitRename(room, event.target.value)}
-              />
-            ) : (
-              <span className="ShareDialog__myRoomsRowLabel">
-                <span className="ShareDialog__myRoomsRow__id">
-                  {room.name || room.roomId}
-                </span>
-                {room.name && (
-                  <span className="ShareDialog__myRoomsRowSubId">
-                    {room.roomId}
-                  </span>
-                )}
-              </span>
-            )}
-            <span className="ShareDialog__myRoomsRow__meta">
-              {t("myRooms.lastActive")} {formatLastActive(room.lastActiveAt)}
-              {room.hasScene && (
-                <span className="ShareDialog__myRoomsBadge">
-                  {t("myRooms.hasScene")}
-                </span>
-              )}
-            </span>
-            <span className="ShareDialog__myRoomsActions">
-              {!isEditing && (
-                <button
-                  type="button"
-                  className="ShareDialog__myRoomsActionButton"
-                  title={t("myRooms.rename")}
-                  aria-label={t("myRooms.rename")}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setConfirmingDeleteRoomId(null);
-                    setEditingRoomId(room.roomId);
-                  }}
-                >
-                  {pencilIcon}
-                </button>
-              )}
-              <button
-                type="button"
-                className={`ShareDialog__myRoomsActionButton ShareDialog__myRoomsActionButton--delete${
-                  isConfirmingDelete
-                    ? " ShareDialog__myRoomsActionButton--confirm"
-                    : ""
-                }`}
-                title={t("myRooms.delete")}
-                aria-label={t("myRooms.delete")}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (isConfirmingDelete) {
-                    confirmDelete(room);
-                  } else {
-                    setEditingRoomId(null);
-                    setConfirmingDeleteRoomId(room.roomId);
-                  }
-                }}
-              >
-                {isConfirmingDelete ? t("myRooms.confirmDelete") : TrashIcon}
-              </button>
-            </span>
-          </div>
-        );
-      })}
-    </div>
   );
 };
 

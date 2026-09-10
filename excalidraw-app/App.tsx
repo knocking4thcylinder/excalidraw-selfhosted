@@ -94,6 +94,7 @@ import {
   SYNC_BROWSER_TABS_TIMEOUT,
 } from "./app_constants";
 import Collab, {
+  activeRoomLinkAtom,
   collabAPIAtom,
   isCollaboratingAtom,
   isOfflineAtom,
@@ -131,6 +132,8 @@ import {
 } from "./data/LocalData";
 import { isBrowserStorageStateNewer } from "./data/tabSync";
 import { ShareDialog, shareDialogStateAtom } from "./share/ShareDialog";
+import { RoomsPage } from "./rooms/RoomsPage";
+import { isRoomsHash, openRoomsPage } from "./rooms/roomsRoute";
 import CollabError, { collabErrorIndicatorAtom } from "./collab/CollabError";
 import { useHandleAppTheme } from "./useHandleAppTheme";
 import { getPreferredLanguage } from "./app-language/language-detector";
@@ -412,6 +415,23 @@ const ExcalidrawWrapper = () => {
   });
   const collabError = useAtomValue(collabErrorIndicatorAtom);
   const userToFollow = useAtomValue(userToFollowAtom);
+  const activeRoomLink = useAtomValue(activeRoomLinkAtom);
+
+  // Standalone Rooms page route (#rooms). The canvas, Collab socket and scene
+  // stay mounted underneath; the page is a full-screen overlay.
+  const [isRoomsRoute, setIsRoomsRoute] = useState(() =>
+    isRoomsHash(window.location.hash),
+  );
+
+  useEffect(() => {
+    const syncRoomsRoute = () => {
+      setIsRoomsRoute(isRoomsHash(window.location.hash));
+    };
+    window.addEventListener(EVENT.HASHCHANGE, syncRoomsRoute, false);
+    return () => {
+      window.removeEventListener(EVENT.HASHCHANGE, syncRoomsRoute, false);
+    };
+  }, []);
 
   const viewportStatusFrame = useMemo(
     () =>
@@ -571,6 +591,11 @@ const ExcalidrawWrapper = () => {
       event.preventDefault();
       const libraryUrlTokens = parseLibraryTokensFromUrl();
       if (!libraryUrlTokens) {
+        // The Rooms page is an overlay above the live canvas: navigating to
+        // it must not touch the session.
+        if (isRoomsHash(window.location.hash)) {
+          return;
+        }
         // Tear down the old socket even when the target is another
         // collaboration room: startCollaboration() early-returns while a
         // socket exists, so without this, room A -> room B is a no-op and
@@ -578,6 +603,20 @@ const ExcalidrawWrapper = () => {
         // confirm dialog (no history push), initializeScene() below starts
         // the new room.
         if (collabAPI?.isCollaborating()) {
+          // Same-room navigation (e.g. closing the Rooms page back onto the
+          // active room) must not tear down and reconnect the live session.
+          const target = getCollaborationLinkData(window.location.href);
+          const active = activeRoomLink
+            ? getCollaborationLinkData(activeRoomLink)
+            : null;
+          if (
+            target &&
+            active &&
+            target.roomId === active.roomId &&
+            target.roomKey === active.roomKey
+          ) {
+            return;
+          }
           collabAPI.stopCollaboration(false);
         }
         excalidrawAPI.updateScene({ appState: { isLoading: true } });
@@ -688,7 +727,14 @@ const ExcalidrawWrapper = () => {
         false,
       );
     };
-  }, [isCollabDisabled, collabAPI, excalidrawAPI, setLangCode, loadImages]);
+  }, [
+    isCollabDisabled,
+    collabAPI,
+    excalidrawAPI,
+    setLangCode,
+    loadImages,
+    activeRoomLink,
+  ]);
 
   useEffect(() => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
@@ -832,6 +878,19 @@ const ExcalidrawWrapper = () => {
     () => setShareDialogState({ isOpen: true, type: "collaborationOnly" }),
     [setShareDialogState],
   );
+
+  const onRoomsOpen = useCallback(() => {
+    openRoomsPage(window);
+    // openRoomsPage assigns location.hash (fires hashchange → route effect
+    // hides/shows the page), but when already on the route no event fires.
+    setIsRoomsRoute(true);
+  }, []);
+
+  // RoomsPage calls this after it already navigated (or deliberately didn't):
+  // just resync visibility with the actual hash.
+  const onRoomsClose = useCallback(() => {
+    setIsRoomsRoute(isRoomsHash(window.location.hash));
+  }, []);
 
   // ---------------------------------------------------------------------------
   // onExport — intercepts file save to wait for pending image loads
@@ -1032,6 +1091,7 @@ const ExcalidrawWrapper = () => {
       >
         <AppMainMenu
           onCollabDialogOpen={onCollabDialogOpen}
+          onRoomsOpen={onRoomsOpen}
           isCollaborating={isCollaborating}
           isCollabEnabled={!isCollabDisabled}
           theme={appTheme}
@@ -1103,6 +1163,10 @@ const ExcalidrawWrapper = () => {
           }}
         />
 
+        {isRoomsRoute && (
+          <RoomsPage collabAPI={collabAPI} onClose={onRoomsClose} />
+        )}
+
         <AppSidebar />
 
         {errorMessage && (
@@ -1130,6 +1194,15 @@ const ExcalidrawWrapper = () => {
                   isOpen: true,
                   type: "collaborationOnly",
                 });
+              },
+            },
+            {
+              label: t("myRooms.title"),
+              category: DEFAULT_CATEGORIES.app,
+              keywords: ["rooms", "switch", "manage", "list"],
+              icon: usersIcon,
+              perform: () => {
+                onRoomsOpen();
               },
             },
             {

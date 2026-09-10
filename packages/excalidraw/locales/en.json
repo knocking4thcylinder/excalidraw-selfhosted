@@ -453,7 +453,24 @@
       "minutes": "{{count}} min ago",
       "hours": "{{count}} h ago",
       "days": "{{count}} d ago"
-    }
+    },
+    "open": "Open",
+    "newRoom": "New room",
+    "joinTitle": "Join a room",
+    "listTitle": "Rooms",
+    "close": "Close",
+    "exitRoom": "Exit room",
+    "leaveSession": "Leave session",
+    "active": "current",
+    "share": "Share",
+    "linkLabel": "Link",
+    "codeLabel": "Room code",
+    "copyLink": "Copy link",
+    "copyCode": "Copy code",
+    "copied": "Copied",
+    "createError": "Couldn't create the room.",
+    "shareError": "Couldn't get a share code.",
+    "copyError": "Couldn't copy to clipboard."
   },
   "errorDialog": {
     "title": "Error"
