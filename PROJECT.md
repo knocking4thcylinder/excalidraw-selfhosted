@@ -63,6 +63,7 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
      service-worker interception); `GET /s/<code>` returns a 302 to the room.
      Plus the My Rooms registry: `POST /api/rooms` (register/touch a room),
      `GET /api/rooms` (list, most-recent first),
+     `POST /api/rooms/<roomId>/rename` and `DELETE /api/rooms/<roomId>` (rename/delete),
      `POST /api/rooms/<roomId>/scene` + `GET /api/rooms/<roomId>/scene`
      (save/load an encrypted snapshot), `GET /api/rooms/<roomId>/scene-history`
      — registry in `rooms.json`, snapshots in `scenes.json`.

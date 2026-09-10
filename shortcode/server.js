@@ -139,8 +139,50 @@ http
     if (req.method === "GET" && u.pathname === "/api/rooms") {
       json(res, 200, {
         rooms: Object.entries(rooms)
-          .map(([roomId, r]) => ({ roomId, key: r.key, createdAt: r.createdAt, lastActiveAt: r.lastActiveAt, hasScene: r.hasScene }))
+          .map(([roomId, r]) => ({ roomId, key: r.key, createdAt: r.createdAt, lastActiveAt: r.lastActiveAt, hasScene: r.hasScene, ...(r.name ? { name: r.name } : {}) }))
           .sort((a, b) => b.lastActiveAt - a.lastActiveAt),
+      });
+      return;
+    }
+
+    const rn = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/rename$/);
+    if (req.method === "POST" && rn) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let p = {};
+        try { p = JSON.parse(body); } catch {}
+        const id = normId(rn[1]);
+        const room = rooms[id];
+        if (!room) { json(res, 404, { error: "unknown room" }); return; }
+        if (p.key !== room.key) { json(res, 403, { error: "wrong key" }); return; }
+        if (typeof p.name !== "string") { json(res, 400, { error: "name must be a string" }); return; }
+        const name = p.name.trim();
+        if (name.length > 64) { json(res, 400, { error: "name too long" }); return; }
+        if (name) room.name = name; else delete room.name;
+        saveRooms();
+        json(res, 200, { ok: true });
+      });
+      return;
+    }
+
+    const del = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})$/);
+    if (req.method === "DELETE" && del) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let p = {};
+        try { p = JSON.parse(body); } catch {}
+        const id = normId(del[1]);
+        const room = rooms[id];
+        if (!room) { json(res, 404, { error: "unknown room" }); return; }
+        const key = typeof p.key === "string" ? p.key : u.searchParams.get("key");
+        if (key !== room.key) { json(res, 403, { error: "wrong key" }); return; }
+        delete rooms[id];
+        delete scenes[id];
+        saveRooms();
+        saveScenes();
+        json(res, 200, { ok: true });
       });
       return;
     }
