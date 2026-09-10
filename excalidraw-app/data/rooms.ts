@@ -177,6 +177,31 @@ export const saveRoomToServer = async (
       return;
     }
 
+    // Anti-clobber guard (incident 2026-09-11): after a server restart or
+    // service churn, fresh joins initialize an empty scene and the regular
+    // autosave would permanently overwrite the good snapshot with it.
+    // Never overwrite a stored snapshot with an empty scene — a room is
+    // cleared for real via delete, not by saving blank. The GET only happens
+    // on the rare empty-save path, so it costs nothing in normal operation.
+    if (elements.length === 0) {
+      try {
+        const probe = await fetch(
+          `/api/rooms/${encodeURIComponent(
+            roomId,
+          )}/scene?key=${encodeURIComponent(roomKey)}`,
+          { cache: "no-store" },
+        );
+        if (probe.ok) {
+          console.warn(
+            "rooms: refusing to overwrite stored snapshot with empty scene",
+          );
+          return;
+        }
+      } catch {
+        // probe failed — fall through and let the save attempt report itself
+      }
+    }
+
     // encrypt exactly like firebase.ts encryptElements
     const json = JSON.stringify(elements);
     const encoded = new TextEncoder().encode(json);
