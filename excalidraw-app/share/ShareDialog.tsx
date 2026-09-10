@@ -6,11 +6,13 @@ import { TextField } from "@excalidraw/excalidraw/components/TextField";
 import {
   copyIcon,
   LinkIcon,
+  pencilIcon,
   playerPlayIcon,
   playerStopFilledIcon,
   share,
   shareIOS,
   shareWindows,
+  TrashIcon,
 } from "@excalidraw/excalidraw/components/icons";
 import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
 import { useExcalidrawContainer } from "@excalidraw/excalidraw/components/App";
@@ -22,7 +24,12 @@ import { useEffect, useRef, useState } from "react";
 import { atom, useAtom, useAtomValue } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
 import { getCollaborationLinkData } from "../data";
-import { fetchRooms, type ServerRoomEntry } from "../data/rooms";
+import {
+  deleteRoom,
+  fetchRooms,
+  renameRoom,
+  type ServerRoomEntry,
+} from "../data/rooms";
 
 import "./ShareDialog.scss";
 import { QRCode } from "./QRCode";
@@ -428,6 +435,12 @@ const MyRooms = () => {
   const { container } = useExcalidrawContainer();
   const [rooms, setRooms] = useState<ServerRoomEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
+  // rename/delete (feature v2): at most one row in edit mode and one row with
+  // an armed (confirm) delete button at a time
+  const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+  const [confirmingDeleteRoomId, setConfirmingDeleteRoomId] = useState<
+    string | null
+  >(null);
 
   // the dialog unmounts when closed, so mounting == dialog opened
   useEffect(() => {
@@ -443,6 +456,28 @@ const MyRooms = () => {
       alive = false;
     };
   }, []);
+
+  const refreshRooms = async () => {
+    setRooms(await fetchRooms());
+  };
+
+  const submitRename = async (room: ServerRoomEntry, value: string) => {
+    setEditingRoomId(null);
+    if (await renameRoom(room.roomId, room.key, value.trim())) {
+      refreshRooms();
+    } else {
+      console.error(t("myRooms.renameError"));
+    }
+  };
+
+  const confirmDelete = async (room: ServerRoomEntry) => {
+    setConfirmingDeleteRoomId(null);
+    if (await deleteRoom(room.roomId, room.key)) {
+      refreshRooms();
+    } else {
+      console.error(t("myRooms.deleteError"));
+    }
+  };
 
   const ownerWindow = container?.ownerDocument.defaultView ?? window;
   const currentRoom = getCollaborationLinkData(ownerWindow.location.href);
@@ -482,6 +517,8 @@ const MyRooms = () => {
     <div className="ShareDialog__myRoomsList">
       {rooms.map((room) => {
         const isActive = currentRoom?.roomId === room.roomId;
+        const isEditing = editingRoomId === room.roomId;
+        const isConfirmingDelete = confirmingDeleteRoomId === room.roomId;
         return (
           <div
             key={room.roomId}
@@ -490,13 +527,40 @@ const MyRooms = () => {
               isActive ? " ShareDialog__myRoomsRow--active" : ""
             }`}
             onClick={() => {
-              if (isActive) {
+              if (isActive || isEditing) {
                 return;
               }
               ownerWindow.location.href = `${ownerWindow.location.origin}/#room=${room.roomId},${room.key}`;
             }}
           >
-            <span className="ShareDialog__myRoomsRow__id">{room.roomId}</span>
+            {isEditing ? (
+              <input
+                className="ShareDialog__myRoomsRowEditInput"
+                defaultValue={room.name ?? ""}
+                placeholder={t("myRooms.renamePlaceholder")}
+                autoFocus
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  if (event.key === KEYS.ENTER) {
+                    submitRename(room, event.currentTarget.value);
+                  } else if (event.key === KEYS.ESCAPE) {
+                    setEditingRoomId(null);
+                  }
+                }}
+                onBlur={(event) => submitRename(room, event.target.value)}
+              />
+            ) : (
+              <span className="ShareDialog__myRoomsRowLabel">
+                <span className="ShareDialog__myRoomsRow__id">
+                  {room.name || room.roomId}
+                </span>
+                {room.name && (
+                  <span className="ShareDialog__myRoomsRowSubId">
+                    {room.roomId}
+                  </span>
+                )}
+              </span>
+            )}
             <span className="ShareDialog__myRoomsRow__meta">
               {t("myRooms.lastActive")} {formatLastActive(room.lastActiveAt)}
               {room.hasScene && (
@@ -504,6 +568,44 @@ const MyRooms = () => {
                   {t("myRooms.hasScene")}
                 </span>
               )}
+            </span>
+            <span className="ShareDialog__myRoomsActions">
+              {!isEditing && (
+                <button
+                  type="button"
+                  className="ShareDialog__myRoomsActionButton"
+                  title={t("myRooms.rename")}
+                  aria-label={t("myRooms.rename")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setConfirmingDeleteRoomId(null);
+                    setEditingRoomId(room.roomId);
+                  }}
+                >
+                  {pencilIcon}
+                </button>
+              )}
+              <button
+                type="button"
+                className={`ShareDialog__myRoomsActionButton ShareDialog__myRoomsActionButton--delete${
+                  isConfirmingDelete
+                    ? " ShareDialog__myRoomsActionButton--confirm"
+                    : ""
+                }`}
+                title={t("myRooms.delete")}
+                aria-label={t("myRooms.delete")}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (isConfirmingDelete) {
+                    confirmDelete(room);
+                  } else {
+                    setEditingRoomId(null);
+                    setConfirmingDeleteRoomId(room.roomId);
+                  }
+                }}
+              >
+                {isConfirmingDelete ? t("myRooms.confirmDelete") : TrashIcon}
+              </button>
             </span>
           </div>
         );

@@ -442,6 +442,12 @@
     "hasScene": "saved",
     "loadingError": "Couldn't load your rooms. Check your connection.",
     "registerError": "Couldn't register the room on the server.",
+    "rename": "Rename",
+    "delete": "Delete",
+    "confirmDelete": "Sure?",
+    "renamePlaceholder": "Room name",
+    "renameError": "Couldn't rename the room.",
+    "deleteError": "Couldn't delete the room.",
     "timeAgo": {
       "justNow": "just now",
       "minutes": "{{count}} min ago",

@@ -29,6 +29,8 @@ export type ServerRoomEntry = {
   createdAt: number;
   lastActiveAt: number;
   hasScene: boolean;
+  // optional display label (rename feature v2); roomId/key stay stable
+  name?: string;
 };
 
 // private
@@ -93,6 +95,47 @@ export const fetchRooms = async (): Promise<ServerRoomEntry[] | null> => {
     return Array.isArray(data?.rooms) ? data.rooms : null;
   } catch {
     return null;
+  }
+};
+
+// rename sets a display label only; empty name clears it (server trims).
+// Never throws — the caller refreshes the list / logs on false.
+export const renameRoom = async (
+  roomId: string,
+  roomKey: string,
+  name: string,
+): Promise<boolean> => {
+  try {
+    const resp = await fetch(
+      `/api/rooms/${encodeURIComponent(roomId)}/rename`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ key: roomKey, name }),
+      },
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+};
+
+// removes the registry entry AND the stored scene. Never throws.
+export const deleteRoom = async (
+  roomId: string,
+  roomKey: string,
+): Promise<boolean> => {
+  try {
+    const resp = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ key: roomKey }),
+    });
+    return resp.ok;
+  } catch {
+    return false;
   }
 };
 
