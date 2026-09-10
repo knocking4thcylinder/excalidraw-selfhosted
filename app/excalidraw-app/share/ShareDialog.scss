@@ -1,0 +1,361 @@
+@import "../../packages/excalidraw/css/variables.module.scss";
+
+.excalidraw {
+  .ShareDialog {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+
+    @include isMobile {
+      height: calc(100vh - 5rem);
+    }
+
+    &__separator {
+      border-top: 1px solid var(--dialog-border-color);
+      text-align: center;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 1em;
+
+      span {
+        background: var(--island-bg-color);
+        padding: 0px 0.75rem;
+        transform: translateY(-1ch);
+        display: inline-flex;
+        line-height: 1;
+      }
+    }
+
+    &__roomCode {
+      display: flex;
+      align-items: flex-end;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+
+    &__roomCodeHint {
+      margin: 0.25em 0 0;
+      font-size: 0.85em;
+      opacity: 0.75;
+    }
+
+    // keep the active dialog row from overflowing on narrow screens
+    &__active__linkRow {
+      display: flex;
+      align-items: flex-end;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    &__popover {
+      @keyframes ShareDialog__popover__scaleIn {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      box-sizing: border-box;
+      z-index: 100;
+
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 0.125rem 0.5rem;
+      gap: 0.125rem;
+
+      height: 1.125rem;
+
+      border: none;
+      border-radius: 0.6875rem;
+
+      font-family: "Assistant";
+      font-style: normal;
+      font-weight: 600;
+      font-size: 0.75rem;
+      line-height: 110%;
+
+      background: var(--color-success);
+      color: var(--color-success-text);
+
+      & > svg {
+        width: 0.875rem;
+        height: 0.875rem;
+      }
+
+      transform-origin: var(--radix-popover-content-transform-origin);
+      animation: ShareDialog__popover__scaleIn 150ms ease-out;
+    }
+
+    &__picker {
+      font-family: "Assistant";
+
+      &__illustration {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        justify-content: center;
+
+        & svg {
+          filter: var(--theme-filter);
+        }
+      }
+
+      &__header {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        justify-content: center;
+
+        font-weight: 700;
+        font-size: 1.3125rem;
+        line-height: 130%;
+
+        color: var(--color-primary);
+      }
+
+      &__description {
+        font-weight: 400;
+        font-size: 0.875rem;
+        line-height: 150%;
+
+        text-align: center;
+
+        color: var(--text-primary-color);
+
+        & strong {
+          display: block;
+          font-weight: 700;
+        }
+      }
+
+      &__button {
+        display: flex;
+
+        align-items: center;
+        justify-content: center;
+      }
+    }
+
+    &__active {
+      &__share {
+        display: none !important;
+
+        @include isMobile {
+          display: flex !important;
+        }
+      }
+
+      &__header {
+        margin: 0;
+      }
+
+      &__linkRow {
+        display: flex;
+        flex-direction: row;
+        align-items: flex-end;
+        gap: 0.75rem;
+      }
+
+      &__qrcode {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        align-self: center;
+        padding: 1rem;
+        background: #fff;
+        border-radius: 0.5rem;
+        border: 1px solid #e0e0e0;
+
+        $size: 150px;
+        width: $size;
+        height: $size;
+
+        & svg {
+          width: $size;
+          height: $size;
+        }
+
+        &--loading {
+          background: var(--island-bg-color);
+          border: 1px solid var(--dialog-border-color);
+        }
+      }
+
+      &__description {
+        border-top: 1px solid var(--color-gray-20);
+
+        padding: 0.5rem 0.5rem 0;
+        font-weight: 400;
+        font-size: 0.75rem;
+        line-height: 150%;
+
+        & p {
+          margin: 0;
+        }
+
+        & p + p {
+          margin-top: 1em;
+        }
+      }
+
+      &__actions {
+        display: flex;
+        justify-content: center;
+      }
+    }
+
+    &__myRoomsList {
+      font-family: "Assistant";
+      max-height: 12rem;
+      overflow-y: auto;
+      border: 1px solid var(--dialog-border-color);
+      border-radius: 0.5rem;
+    }
+
+    &__myRoomsRow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+      color: var(--text-primary-color);
+      font-size: 0.875rem;
+      line-height: 150%;
+
+      &:hover {
+        background-color: var(--button-hover-bg, var(--island-bg-color));
+      }
+
+      & + & {
+        border-top: 1px solid var(--dialog-border-color);
+      }
+
+      &--active,
+      &--active:hover {
+        background-color: var(--color-primary-light);
+        cursor: default;
+      }
+
+      &__id {
+        font-family: monospace;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      &__meta {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.75rem;
+        opacity: 0.75;
+      }
+    }
+
+    &__myRoomsBadge {
+      padding: 0.125rem 0.5rem;
+      border-radius: 0.6875rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      line-height: 110%;
+      background: var(--color-success);
+      color: var(--color-success-text);
+      opacity: 1;
+    }
+
+    &__myRoomsRowLabel {
+      display: inline-flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    &__myRoomsRowSubId {
+      font-family: monospace;
+      font-size: 0.75rem;
+      opacity: 0.6;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &__myRoomsRowEditInput {
+      flex: 1;
+      min-width: 0;
+      padding: 0.125rem 0.375rem;
+      border: 1px solid var(--color-primary);
+      border-radius: 0.375rem;
+      background: var(--island-bg-color);
+      color: var(--text-primary-color);
+      font-family: "Assistant";
+      font-size: 0.875rem;
+      line-height: 150%;
+    }
+
+    &__myRoomsActions {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    &__myRoomsActionButton {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.25rem;
+      border: none;
+      border-radius: 0.375rem;
+      background: transparent;
+      color: var(--text-primary-color);
+      cursor: pointer;
+      opacity: 0.6;
+
+      svg {
+        width: 1rem;
+        height: 1rem;
+      }
+
+      &:hover {
+        opacity: 1;
+        background-color: var(--button-hover-bg, var(--island-bg-color));
+      }
+
+      &--delete:hover {
+        color: var(--color-danger);
+      }
+
+      &--confirm {
+        opacity: 1;
+        padding: 0.25rem 0.5rem;
+        background: var(--color-danger-background);
+        color: var(--color-danger-color);
+        font-family: "Assistant";
+        font-size: 0.75rem;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+    }
+
+    &__myRoomsEmpty,
+    &__myRoomsError {
+      font-family: "Assistant";
+      font-size: 0.875rem;
+      line-height: 150%;
+      text-align: center;
+      color: var(--text-primary-color);
+      opacity: 0.75;
+    }
+
+    &__myRoomsError {
+      color: var(--color-danger);
+      opacity: 1;
+    }
+  }
+}

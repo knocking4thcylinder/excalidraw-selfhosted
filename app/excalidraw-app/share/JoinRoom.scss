@@ -1,0 +1,17 @@
+.JoinRoom {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+
+  &__field {
+    flex: 1 1 14rem;
+    min-width: 0;
+  }
+
+  &__error {
+    flex: 1 1 100%;
+    color: #e33;
+    font-size: 0.85em;
+  }
+}
