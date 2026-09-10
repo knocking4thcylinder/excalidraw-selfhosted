@@ -441,6 +441,10 @@ const MyRooms = () => {
   const [confirmingDeleteRoomId, setConfirmingDeleteRoomId] = useState<
     string | null
   >(null);
+  const switchRoom = (room: ServerRoomEntry) => {
+    const link = `${ownerWindow.location.origin}${ownerWindow.location.pathname}#room=${room.roomId},${room.key}`;
+    ownerWindow.location.href = link;
+  };
 
   // the dialog unmounts when closed, so mounting == dialog opened
   useEffect(() => {
@@ -530,7 +534,7 @@ const MyRooms = () => {
               if (isActive || isEditing) {
                 return;
               }
-              ownerWindow.location.href = `${ownerWindow.location.origin}/#room=${room.roomId},${room.key}`;
+              switchRoom(room);
             }}
           >
             {isEditing ? (
