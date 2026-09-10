@@ -81,9 +81,31 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
   (it stores room keys server-side) for shorter links — delete
   `shortcode-data/codes.json` at any time to revoke
 
-## Updating Excalidraw itself
+## Repo layout (monorepo)
 
-The app image is built from the fork (`excalidraw-selfhosted-fork`, branch `main`).
-To roll changes: commit to the fork, then on the Deck either re-run `install.sh`
-(fresh image build) or provide an updated `fork.bundle` next to it
-(`git bundle create fork.bundle main`) and re-run `install.sh`.
+This repo is the whole project: packaging (`install.sh`, `shortcode/`,
+`mac/`, `android/`) plus the app source under `app/` (the former
+`excalidraw-selfhosted-fork`, merged as a git subtree with full history —
+see `git log -- app`). `~/excalidraw` on the Deck IS this repo's checkout
+(branch `master`); runtime files (`shortcode-data/`, `certs/`, `Caddyfile`,
+`shortcode-server.js`) live next to it, gitignored, never committed.
+
+Pulling upstream Excalidraw into `app/` later:
+
+```bash
+git subtree pull --prefix=app https://github.com/excalidraw/excalidraw.git <tag-or-main> --squash
+```
+
+(`--squash` keeps upstream history out of our log; drop it to keep full
+history. The old `excalidraw-selfhosted-fork` remote is frozen/archive.)
+
+## Updating the app on the Deck
+
+Commit under `app/` (or packaging), push `master`, then on the Deck:
+
+```bash
+cd ~/excalidraw && bash deck-redeploy-fork.sh   # git pull + rebuild + swap
+```
+
+No bundles: the Deck updates via `git pull` (needs one read credential for
+this private repo), falling back to files synced from the Mac.

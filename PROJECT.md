@@ -33,9 +33,17 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
   path); the ShareDialog lists rooms across devices. Note: rooms created
   before this feature appear in the list once anyone joins them again.
 
-## The repos (both private, under github.com/knocking4thcylinder)
+## The repo (monorepo, private: github.com/knocking4thcylinder/excalidraw-selfhosted, branch `master`)
 
-1. **`excalidraw-selfhosted`** — the *packaging* repo:
+`~/excalidraw` on the Deck IS this repo's checkout. The former
+`excalidraw-selfhosted-fork` was merged in as `app/` via `git subtree add`
+(full history preserved, incl. the Firestore-load fix `891781cd`); its old
+remote is frozen. Upstream pulls: `git subtree pull --prefix=app
+https://github.com/excalidraw/excalidraw.git <tag> --squash`. No bundles:
+the Deck updates via `git pull` inside `deck-redeploy-fork.sh` (needs one
+read credential for this private repo; otherwise sync files from the Mac).
+
+1. **Packaging** (repo root):
    - `install.sh` — canonical Deck installer. Idempotent. Handles:
      - SteamOS quirks: disables rootfs readonly prerequisite, moves podman's
        root store from `/var` (230 MB!) to `/home/containers/storage`,
@@ -85,10 +93,9 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
      handle `blob:`), VIEW-intent filter for `steamdeck.example.ts.net`
      room links, keep-screen-on, no cleartext traffic.
 
-2. **`excalidraw-selfhosted-fork`** — ex-`excalidraw/excalidraw` snapshot,
-   branch `main` (canonical — the local `selfhost` branch is retired; both
-   `install.sh` and the `deck-redeploy-fork.sh` flow clone `-b main` today),
-   commits applied on top:
+2. **`app/`** — ex-`excalidraw/excalidraw` snapshot (former fork repo,
+   branch `main`, now a subtree; canonical — the local `selfhost` branch is
+   retired), commits applied on top:
    - `excalidraw-app/share/ShareDialog.tsx` + `.../ShareDialog.scss` — new
      "Join room" panel (accepts full link *or* short code via `/api/resolve`,
      validation, error messages), room-code display with Copy in the active

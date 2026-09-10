@@ -1,1 +1,8 @@
 fork.bundle
+# Deck runtime files (live in ~/excalidraw next to the checkout, never committed)
+shortcode-server.js
+shortcode-data/
+Caddyfile
+certs/
+reinstall.sh
+fork/

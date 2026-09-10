@@ -7,14 +7,18 @@ export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 BASE=~/excalidraw
 cd "$BASE"
 
-echo "== 1/5 fresh fork clone =="
-rm -rf fork
-git clone -q fork.bundle fork -b main
+echo "== 1/5 update checkout (monorepo; app source is ./app) =="
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git pull --ff-only
+else
+  echo "not a git checkout — expecting files synced from Mac; continuing with working tree as-is"
+fi
 
 echo "== 2/5 image build (yarn layers cached; src-only changes) =="
-(cd fork && sudo podman build -t excalidraw-selfhost .)
+(cd app && sudo podman build -t excalidraw-selfhost .)
 
 echo "== 3/5 shortcode service (codes persisted to ./shortcode-data/codes.json) =="
+cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
 sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
 mkdir -p "$BASE/shortcode-data"
 sudo podman run -d --name excalidraw-shortcode --restart always --network host \
