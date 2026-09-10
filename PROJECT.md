@@ -66,7 +66,13 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
      `POST /api/rooms/<roomId>/rename` and `DELETE /api/rooms/<roomId>` (rename/delete),
      `POST /api/rooms/<roomId>/scene` + `GET /api/rooms/<roomId>/scene`
      (save/load an encrypted snapshot), `GET /api/rooms/<roomId>/scene-history`
-     — registry in `rooms.json`, snapshots in `scenes.json`.
+     — registry in `rooms.json`, snapshots in `scenes.json`. Snapshots are
+      **versioned** (last 10 kept): every overwrite pushes the previous
+      snapshot to history, fetchable via `GET .../scene?slot=N` (`0` =
+      current) for manual recovery. **Empty scenes never replace a non-empty
+      snapshot** (client declares `isEmpty`, server answers 409; the client
+      also skips such saves) — lesson of the 2026-09-11 incident where
+      post-restart empty joins clobbered two rooms.
    - `android/build.sh`, `android/app/...` — no-gradle APK builder. Downloads
      Google `cmdline-tools` first run, compiles with `aapt2`/`javac`/`d8`
      (SDK 34, min API 21 since HarmonyOS 2.0), signs with a locally generated

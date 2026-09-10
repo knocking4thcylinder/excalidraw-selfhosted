@@ -187,6 +187,22 @@ http
       return;
     }
 
+// Scene snapshots are versioned: every overwrite pushes the previous
+// snapshot onto a capped history (HISTORY_SLOTS), so a bad save is always
+// recoverable via GET ?slot=N. Since payloads are end-to-end encrypted,
+// the server can't tell empty from full — the client declares isEmpty.
+// Invariant (incident 2026-09-11): an empty scene NEVER replaces a
+// non-empty snapshot (409); the client also skips such saves proactively.
+const HISTORY_SLOTS = 10;
+
+const snapOf = (s) => ({
+  iv: s.iv,
+  ciphertext: s.ciphertext,
+  version: s.version ?? null,
+  updatedAt: s.updatedAt,
+  isEmpty: s.isEmpty === true,
+});
+
     const hs = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/scene-history$/);
     if (req.method === "GET" && hs) {
       const id = normId(hs[1]);
@@ -195,7 +211,10 @@ http
       if (u.searchParams.get("key") !== room.key) { json(res, 403, { error: "wrong key" }); return; }
       const s = scenes[id];
       if (!s) { json(res, 404, { error: "no scene" }); return; }
-      json(res, 200, { versions: [{ version: s.version, updatedAt: s.updatedAt }] });
+      json(res, 200, {
+        versions: [{ slot: 0, ...snapOf(s) },
+          ...((s.history || []).map((h, i) => ({ slot: i + 1, ...snapOf(h) })))],
+      });
       return;
     }
 
@@ -207,7 +226,13 @@ http
       if (u.searchParams.get("key") !== room.key) { json(res, 403, { error: "wrong key" }); return; }
       const s = scenes[id];
       if (!s) { json(res, 404, { error: "no scene" }); return; }
-      json(res, 200, { iv: s.iv, ciphertext: s.ciphertext, version: s.version, updatedAt: s.updatedAt });
+      // ?slot=N fetches an older snapshot: 0 = current (default),
+      // 1..HISTORY_SLOTS = history depth. Used for manual recovery.
+      const slot = Number(u.searchParams.get("slot") || 0);
+      const pick = slot === 0 ? s : (s.history || [])[slot - 1];
+      if (!pick) { json(res, 404, { error: "no such slot" }); return; }
+      const out = snapOf(pick);
+      json(res, 200, { iv: out.iv, ciphertext: out.ciphertext, version: out.version, updatedAt: out.updatedAt });
       return;
     }
 
@@ -237,11 +262,24 @@ http
           json(res, 400, { error: "iv and ciphertext required" });
           return;
         }
+        const prev = scenes[id];
+        const isEmpty = p.isEmpty === true;
+        // Hard invariant: an empty scene never replaces a non-empty snapshot.
+        // Old clients that don't declare isEmpty are treated as non-empty
+        // (backward compatible); history still protects against their saves.
+        if (isEmpty && prev && prev.isEmpty !== true) {
+          json(res, 409, { error: "refusing empty overwrite" });
+          return;
+        }
         scenes[id] = {
           iv: p.iv,
           ciphertext: p.ciphertext,
           version: typeof p.sceneVersion === "number" ? p.sceneVersion : null,
           updatedAt: Date.now(),
+          isEmpty,
+          history: prev
+            ? [snapOf(prev), ...((prev.history || []).slice(0, HISTORY_SLOTS - 1))]
+            : [],
         };
         room.hasScene = true;
         room.lastActiveAt = Date.now();
