@@ -1,6 +1,9 @@
 #!/bin/bash
 # One-shot redeploy of the forked app + shortcode service + caddy route.
 set -euo pipefail
+# tailscale lives in ~/.local/bin (login-shell PATH only); non-interactive
+# ssh has a minimal PATH, so add it explicitly.
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 BASE=~/excalidraw
 cd "$BASE"
 
