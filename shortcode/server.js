@@ -263,20 +263,38 @@ const snapOf = (s) => ({
           return;
         }
         const prev = scenes[id];
-        const isEmpty = p.isEmpty === true;
+        const declaresEmpty = p.isEmpty === true;
+        const declaresNonEmpty = p.isEmpty === false;
+        const incomingVersion =
+          typeof p.sceneVersion === "number" ? p.sceneVersion : null;
         // Hard invariant: an empty scene never replaces a non-empty snapshot.
-        // Old clients that don't declare isEmpty are treated as non-empty
-        // (backward compatible); history still protects against their saves.
-        if (isEmpty && prev && prev.isEmpty !== true) {
+        // Payloads are opaque, so emptiness is inferred two ways: an explicit
+        // isEmpty declaration (new clients), or a zero sceneVersion from a
+        // client that doesn't declare non-empty (old clients: sceneVersion is
+        // a sum of element versions, each >= 1, so 0 means empty). Saves that
+        // declare nothing and carry a positive version stay backward
+        // compatible; history still protects against those.
+        const prevVersion =
+          prev && typeof prev.version === "number" ? prev.version : null;
+        const incomingEmpty =
+          declaresEmpty ||
+          (!declaresNonEmpty &&
+            incomingVersion !== null &&
+            incomingVersion <= 0);
+        const prevNonEmpty =
+          !!prev &&
+          prev.isEmpty !== true &&
+          !(prevVersion !== null && prevVersion <= 0);
+        if (incomingEmpty && prevNonEmpty) {
           json(res, 409, { error: "refusing empty overwrite" });
           return;
         }
         scenes[id] = {
           iv: p.iv,
           ciphertext: p.ciphertext,
-          version: typeof p.sceneVersion === "number" ? p.sceneVersion : null,
+          version: incomingVersion,
           updatedAt: Date.now(),
-          isEmpty,
+          isEmpty: declaresEmpty,
           history: prev
             ? [snapOf(prev), ...((prev.history || []).slice(0, HISTORY_SLOTS - 1))]
             : [],
