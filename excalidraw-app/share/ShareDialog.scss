@@ -43,7 +43,7 @@
     // keep the active dialog row from overflowing on narrow screens
     &__active__linkRow {
       display: flex;
-      align-items: center;
+      align-items: flex-end;
       gap: 0.5rem;
       flex-wrap: wrap;
     }

@@ -163,6 +163,8 @@
       display: flex;
       gap: 0.25rem;
       margin-left: auto;
+      align-self: center;
+      flex-shrink: 0;
     }
 
     &__actionButton {

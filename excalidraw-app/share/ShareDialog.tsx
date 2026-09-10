@@ -166,6 +166,7 @@ const ActiveRoomDialog = ({
         )}
         <FilledButton
           size="large"
+          variant="icon"
           label={t("buttons.copyLink")}
           icon={copyIcon}
           status={copyStatus}

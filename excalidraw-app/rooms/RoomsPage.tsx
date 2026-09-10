@@ -337,14 +337,14 @@ export const RoomsPage = ({
                           <span className="RoomsPage__rowId">
                             {room.name || room.roomId}
                           </span>
-                          {room.name && (
-                            <span className="RoomsPage__rowSubId">
-                              {room.roomId}
-                            </span>
-                          )}
                         </button>
                       )}
                       <span className="RoomsPage__rowMeta">
+                        {room.name && (
+                          <span className="RoomsPage__rowSubId">
+                            {room.roomId} ·{" "}
+                          </span>
+                        )}
                         {t("myRooms.lastActive")}{" "}
                         {formatLastActive(room.lastActiveAt)}
                         {room.hasScene && (

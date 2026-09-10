@@ -7,6 +7,8 @@ import { useState } from "react";
 
 import { getCollaborationLinkData } from "../data";
 
+import "./JoinRoom.scss";
+
 // Accepts a full room link or a short code (resolved via /api/resolve).
 // Reused by the Share dialog and the standalone Rooms page.
 export const JoinRoom = ({
@@ -65,31 +67,27 @@ export const JoinRoom = ({
   };
 
   return (
-    <div>
-      <TextField
-        label={t("roomDialog.joinLinkLabel")}
-        fullWidth
-        value={link}
-        placeholder={t("roomDialog.joinLinkPlaceholder")}
-        onChange={(value) => {
-          setLink(value);
-          setError(null);
-        }}
-        onKeyDown={(event) => event.key === KEYS.ENTER && join()}
-      />
-      {error && (
-        <div style={{ color: "#e33", fontSize: "0.85em", marginTop: "0.4em" }}>
-          {error}
-        </div>
-      )}
-      <div className="ShareDialog__picker__button">
-        <FilledButton
-          size="large"
-          label={t("roomDialog.button_joinSession")}
-          icon={LinkIcon}
-          onClick={join}
+    <div className="JoinRoom">
+      <div className="JoinRoom__field">
+        <TextField
+          label={t("roomDialog.joinLinkLabel")}
+          fullWidth
+          value={link}
+          placeholder={t("roomDialog.joinLinkPlaceholder")}
+          onChange={(value) => {
+            setLink(value);
+            setError(null);
+          }}
+          onKeyDown={(event) => event.key === KEYS.ENTER && join()}
         />
       </div>
+      <FilledButton
+        size="large"
+        label={t("roomDialog.button_joinSession")}
+        icon={LinkIcon}
+        onClick={join}
+      />
+      {error && <div className="JoinRoom__error">{error}</div>}
     </div>
   );
 };
