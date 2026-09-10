@@ -13,20 +13,21 @@ import {
   shareWindows,
 } from "@excalidraw/excalidraw/components/icons";
 import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
+import { useExcalidrawContainer } from "@excalidraw/excalidraw/components/App";
 import { useCopyStatus } from "@excalidraw/excalidraw/hooks/useCopiedIndicator";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
-import { KEYS, getFrame } from "@excalidraw/common";
+import { APP_NAME, KEYS, getFrame } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
 
 import { atom, useAtom, useAtomValue } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
+import { getCollaborationLinkData } from "../data";
+import { fetchRooms, type ServerRoomEntry } from "../data/rooms";
 
 import "./ShareDialog.scss";
 import { QRCode } from "./QRCode";
 
 import type { CollabAPI } from "../collab/Collab";
-import { getCollaborationLinkData } from "../data";
-import { APP_NAME } from "@excalidraw/common";
 
 type OnExportToBackend = () => void;
 type ShareDialogType = "share" | "collaborationOnly";
@@ -90,7 +91,9 @@ const ActiveRoomDialog = ({
   }, [activeRoomLink]);
 
   const copyRoomCode = async () => {
-    if (!roomCode) return;
+    if (!roomCode) {
+      return;
+    }
     try {
       await copyTextToSystemClipboard(roomCode);
     } catch (e) {
@@ -214,6 +217,12 @@ const ActiveRoomDialog = ({
         <p>{t("roomDialog.desc_exitSession")}</p>
       </div>
 
+      <div className="ShareDialog__separator">
+        <span>{t("myRooms.title")}</span>
+      </div>
+
+      <MyRooms />
+
       <div className="ShareDialog__active__actions">
         <FilledButton
           size="large"
@@ -285,6 +294,12 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         />
       </div>
 
+      <div className="ShareDialog__separator">
+        <span>{t("myRooms.title")}</span>
+      </div>
+
+      <MyRooms />
+
       {props.type === "share" && (
         <div className="ShareDialog__separator">
           <span>{t("shareDialog.or")}</span>
@@ -323,12 +338,17 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
   );
 };
 
-const JoinRoom = ({ onJoin }: { onJoin: (linkData: { roomId: string; roomKey: string }) => void }) => {
+const JoinRoom = ({
+  onJoin,
+}: {
+  onJoin: (linkData: { roomId: string; roomKey: string }) => void;
+}) => {
   const { t } = useI18n();
   const [link, setLink] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const isShortCode = (s: string) => /^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{6,10}$/i.test(s.trim());
+  const isShortCode = (s: string) =>
+    /^[A-Z0-9]{4}-[A-Z0-9]{4}$|^[A-Z0-9]{6,10}$/i.test(s.trim());
 
   const join = async () => {
     if (!link.trim()) {
@@ -399,6 +419,95 @@ const JoinRoom = ({ onJoin }: { onJoin: (linkData: { roomId: string; roomKey: st
           onClick={join}
         />
       </div>
+    </div>
+  );
+};
+
+const MyRooms = () => {
+  const { t } = useI18n();
+  const { container } = useExcalidrawContainer();
+  const [rooms, setRooms] = useState<ServerRoomEntry[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // the dialog unmounts when closed, so mounting == dialog opened
+  useEffect(() => {
+    let alive = true;
+    fetchRooms().then((result) => {
+      if (!alive) {
+        return;
+      }
+      setRooms(result);
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const ownerWindow = container?.ownerDocument.defaultView ?? window;
+  const currentRoom = getCollaborationLinkData(ownerWindow.location.href);
+
+  const formatLastActive = (timestamp: number) => {
+    const minutes = Math.floor((Date.now() - timestamp) / 60000);
+    if (minutes < 1) {
+      return t("myRooms.timeAgo.justNow");
+    }
+    if (minutes < 60) {
+      return t("myRooms.timeAgo.minutes", { count: minutes });
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) {
+      return t("myRooms.timeAgo.hours", { count: hours });
+    }
+    return t("myRooms.timeAgo.days", { count: Math.floor(hours / 24) });
+  };
+
+  if (loading) {
+    return <div className="ShareDialog__myRoomsEmpty">…</div>;
+  }
+  if (rooms === null) {
+    return (
+      <div className="ShareDialog__myRoomsError">
+        {t("myRooms.loadingError")}
+      </div>
+    );
+  }
+  if (rooms.length === 0) {
+    return (
+      <div className="ShareDialog__myRoomsEmpty">{t("myRooms.empty")}</div>
+    );
+  }
+
+  return (
+    <div className="ShareDialog__myRoomsList">
+      {rooms.map((room) => {
+        const isActive = currentRoom?.roomId === room.roomId;
+        return (
+          <div
+            key={room.roomId}
+            title={room.roomId}
+            className={`ShareDialog__myRoomsRow${
+              isActive ? " ShareDialog__myRoomsRow--active" : ""
+            }`}
+            onClick={() => {
+              if (isActive) {
+                return;
+              }
+              ownerWindow.location.href = `${ownerWindow.location.origin}/#room=${room.roomId},${room.key}`;
+            }}
+          >
+            <span className="ShareDialog__myRoomsRow__id">{room.roomId}</span>
+            <span className="ShareDialog__myRoomsRow__meta">
+              {t("myRooms.lastActive")} {formatLastActive(room.lastActiveAt)}
+              {room.hasScene && (
+                <span className="ShareDialog__myRoomsBadge">
+                  {t("myRooms.hasScene")}
+                </span>
+              )}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 };

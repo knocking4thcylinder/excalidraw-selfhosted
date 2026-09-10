@@ -435,6 +435,20 @@
     "desc_exitSession": "Stopping the session will disconnect you from the room, but you'll be able to continue working with the scene, locally. Note that this won't affect other people, and they'll still be able to collaborate on their version.",
     "shareTitle": "Join a live collaboration session on Excalidraw"
   },
+  "myRooms": {
+    "title": "My rooms",
+    "empty": "No rooms yet — start a session and it will appear here.",
+    "lastActive": "Last active:",
+    "hasScene": "saved",
+    "loadingError": "Couldn't load your rooms. Check your connection.",
+    "registerError": "Couldn't register the room on the server.",
+    "timeAgo": {
+      "justNow": "just now",
+      "minutes": "{{count}} min ago",
+      "hours": "{{count}} h ago",
+      "days": "{{count}} d ago"
+    }
+  },
   "errorDialog": {
     "title": "Error"
   },

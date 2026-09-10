@@ -86,6 +86,12 @@ import {
   importUsernameFromLocalStorage,
   saveUsernameToLocalStorage,
 } from "../data/localStorage";
+import {
+  isSavedToServer,
+  loadRoomFromServer,
+  registerRoom,
+  saveRoomToServer,
+} from "../data/rooms";
 import { resetBrowserStateVersions } from "../data/tabSync";
 
 import { collabErrorIndicatorAtom } from "./CollabError";
@@ -304,7 +310,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (
       this.isCollaborating() &&
       (this.fileManager.shouldPreventUnload(syncableElements) ||
-        !isSavedToFirebase(this.portal, syncableElements))
+        (!isSavedToFirebase(this.portal, syncableElements) &&
+          !isSavedToServer(this.portal, syncableElements)))
     ) {
       // this won't run in time if user decides to leave the site, but
       //  the purpose is to run in immediately after user decides to stay
@@ -324,6 +331,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     syncableElements: readonly SyncableExcalidrawElement[],
   ) => {
     syncableElements = cloneJSON(syncableElements);
+    // self-hosted fork: mirror every save to the /api/rooms registry (always
+    // on, unlike the env-gated firebase save below). Fire-and-forget —
+    // failures are console-only and must never block collab.
+    saveRoomToServer(this.portal, syncableElements);
     try {
       const storedElements = await saveToFirebase(
         this.portal,
@@ -545,6 +556,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       return null;
     }
 
+    // register/touch the room in the self-hosted registry (both "start
+    // session" and "join" paths converge here). Unconditional,
+    // fire-and-forget.
+    registerRoom(roomId, roomKey);
+
     if (existingRoomLinkData) {
       // when joining existing room, don't merge it with current scene data
       this.excalidrawAPI.resetScene();
@@ -751,6 +767,25 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         console.error(error);
       } finally {
         this.portal.socketInitialized = true;
+      }
+
+      // self-hosted fork: fall back to the /api/rooms snapshot when firebase
+      // has nothing (or is disabled). Returns null on any failure, in which
+      // case other peers will sync us the scene.
+      const serverElements = await loadRoomFromServer(
+        roomLinkData.roomId,
+        roomLinkData.roomKey,
+        this.portal.socket,
+      );
+      if (serverElements) {
+        this.setLastBroadcastedOrReceivedSceneVersion(
+          getSceneVersion(serverElements),
+        );
+
+        return {
+          elements: serverElements,
+          scrollToContent: true,
+        };
       }
     } else {
       this.portal.socketInitialized = true;
