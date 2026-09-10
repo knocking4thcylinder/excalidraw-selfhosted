@@ -261,6 +261,14 @@ export const loadFromFirebase = async (
   roomKey: string,
   socket: Socket | null,
 ): Promise<readonly SyncableExcalidrawElement[] | null> => {
+  // self-hosted fork: public Firestore is disabled (see saveToFirebase) —
+  // skip the network round-trip so room opens fall straight through to the
+  // /api/rooms snapshot instead of hanging on a Firestore timeout and then
+  // rendering empty (incident 2026-09-11: Mac + tablet opened VPD empty
+  // after a long wait).
+  if (import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE !== "true") {
+    return null;
+  }
   const firestore = _getFirestore();
   const docRef = doc(firestore, "scenes", roomId);
   const docSnap = await getDoc(docRef);
