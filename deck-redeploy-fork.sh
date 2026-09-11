@@ -60,7 +60,8 @@ sudo podman rm -f excalidraw 2>/dev/null || true
 sudo podman run -d --name excalidraw --restart always --network host \
   -e FQDN_HOST="$FQDN" \
   excalidraw-selfhost \
-  sh -c 'find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\\1/" {} + && \
+  sh -c 'CFG=/etc/nginx/conf.d/default.conf; grep -q excalidraw-cache-policy $CFG || { printf "%s\n" "    # excalidraw-cache-policy" "    location = /index.html {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"no-store\";" "    }" "    location /assets/ {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"public, max-age=31536000, immutable\";" "    }" > /tmp/cachepol.conf; sed -i -e "/server_name  localhost;/r /tmp/cachepol.conf" $CFG; }; nginx -t && \
+    find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\\1/" {} + && \
     find /usr/share/nginx/html/assets -name "*.js" -exec \
       sed -i -e "s|https://oss-collab\\.excalidraw\\.com|wss://$FQDN_HOST:8443|g" \
              -e "s|wss://oss-collab\\.excalidraw\\.com|wss://$FQDN_HOST:8443|g" {} + && \

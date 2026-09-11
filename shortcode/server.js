@@ -204,6 +204,17 @@ http
 // non-empty snapshot (409); the client also skips such saves proactively.
 const HISTORY_SLOTS = 10;
 
+// Minimal audit trail (incident 2026-09-11): who reads/writes snapshots,
+// from where (tailnet IP via Caddy's X-Forwarded-For), with what outcome.
+// Invaluable when a room "opens empty" — shows whether the client ever
+// asked, and what the server answered.
+const peer = (req) =>
+  req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "?";
+
+const audit = (req, msg) => {
+  console.log(new Date().toISOString(), "AUDIT", peer(req), msg);
+};
+
 const snapOf = (s) => ({
   iv: s.iv,
   ciphertext: s.ciphertext,
@@ -241,6 +252,7 @@ const snapOf = (s) => ({
       const pick = slot === 0 ? s : (s.history || [])[slot - 1];
       if (!pick) { json(res, 404, { error: "no such slot" }); return; }
       const out = snapOf(pick);
+      audit(req, `GET scene ${id} slot=${slot} v=${out.version} -> 200`);
       json(res, 200, { iv: out.iv, ciphertext: out.ciphertext, version: out.version, updatedAt: out.updatedAt });
       return;
     }
@@ -295,6 +307,7 @@ const snapOf = (s) => ({
           prev.isEmpty !== true &&
           !(prevVersion !== null && prevVersion <= 0);
         if (incomingEmpty && prevNonEmpty) {
+          audit(req, `POST scene ${id} EMPTY v=${incomingVersion} -> 409`);
           json(res, 409, { error: "refusing empty overwrite" });
           return;
         }
@@ -312,6 +325,7 @@ const snapOf = (s) => ({
         room.lastActiveAt = Date.now();
         saveRooms();
         saveScenes();
+        audit(req, `POST scene ${id} v=${incomingVersion} empty=${!!declaresEmpty} -> 200`);
         json(res, 200, { ok: true });
       });
       return;
