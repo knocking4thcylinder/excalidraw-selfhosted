@@ -17,6 +17,7 @@ import {
   preventUnload,
   resolvablePromise,
   throttleRAF,
+  type ResolvablePromise,
 } from "@excalidraw/common";
 import { decryptData } from "@excalidraw/excalidraw/data/encryption";
 import { getVisibleSceneBounds } from "@excalidraw/element";
@@ -146,6 +147,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   idleTimeoutId: number | null;
 
   private socketInitializationTimer?: number;
+  // Scene load shared with a second startCollaboration() racing the first
+  // (double-mount/double-effect on boot): while set, a newcomer to the SAME
+  // room awaits it instead of resolving null instantly and winning the race
+  // with a permanently empty canvas (incident 2026-09-11).
+  private pendingScenePromise: ResolvablePromise<
+    | (ImportedDataState & { elements: readonly OrderedExcalidrawElement[] })
+    | null
+  > | null = null;
   private lastBroadcastedOrReceivedSceneVersion: number = -1;
   private collaborators = new Map<SocketId, Collaborator>();
   /** the socket ids of the users following the current user */
@@ -500,6 +509,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
 
     if (this.portal.socket) {
+      if (
+        this.pendingScenePromise &&
+        this.portal.roomId === existingRoomLinkData?.roomId
+      ) {
+        return this.pendingScenePromise;
+      }
       return null;
     }
 
@@ -522,6 +537,17 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       | (ImportedDataState & { elements: readonly OrderedExcalidrawElement[] })
       | null
     >();
+
+    // Publish the in-flight load so a racing second call to the same room
+    // shares it (see pendingScenePromise). Cleared on settle; later calls
+    // fall back to the historical null behavior.
+    this.pendingScenePromise = scenePromise;
+    const clearPendingScene = () => {
+      if (this.pendingScenePromise === scenePromise) {
+        this.pendingScenePromise = null;
+      }
+    };
+    scenePromise.then(clearPendingScene, clearPendingScene);
 
     this.setIsCollaborating(true);
     LocalData.pauseSave("collaboration");
