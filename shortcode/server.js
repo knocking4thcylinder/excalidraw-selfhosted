@@ -28,10 +28,19 @@ const saveScenes = () => {
   try { fs.writeFileSync(SCENES_FILE, JSON.stringify(scenes, null, 2)); } catch (e) { console.error("save failed", e); }
 };
 
-// JSON reply for the /api/rooms endpoints — never cached (like /api/resolve)
+// JSON reply for the /api/rooms endpoints — never cached (like /api/resolve).
+// Content-Length is set explicitly: without it node uses chunked encoding,
+// and chunked JSON bodies stall some proxied browsers on this tailnet
+// (incident 2026-09-11: 3.8 MB scene snapshot never completed in-page while
+// curl received it fine; small chunked bodies squeaked through).
 const json = (res, status, obj) => {
-  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
-  res.end(JSON.stringify(obj));
+  const body = JSON.stringify(obj);
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(body),
+  });
+  res.end(body);
 };
 
 // purely-alphanumeric ids are case-normalized; keys are case-sensitive, never normalized
