@@ -615,6 +615,33 @@ class Collab extends PureComponent<CollabProps, CollabState> {
               >(decryptedData.payload.elements);
               const reconciledElements =
                 this._reconcileElements(remoteElements);
+              // Self-hosted rooms: an empty INIT from idle peers camped in
+              // the room must not hide the stored snapshot (incident
+              // 2026-09-11: ghosts with empty scenes made every joiner render
+              // empty while the server held 1281 strokes). Live non-empty
+              // content still wins; only an empty INIT falls back.
+              if (
+                !reconciledElements.length &&
+                roomId &&
+                roomKey &&
+                this.portal.socket
+              ) {
+                const savedElements = await loadRoomFromServer(
+                  roomId,
+                  roomKey,
+                  this.portal.socket,
+                );
+                if (savedElements?.length) {
+                  this.setLastBroadcastedOrReceivedSceneVersion(
+                    getSceneVersion(savedElements),
+                  );
+                  scenePromise.resolve({
+                    elements: savedElements,
+                    scrollToContent: true,
+                  });
+                  break;
+                }
+              }
               this.handleRemoteSceneUpdate(reconciledElements);
               // noop if already resolved via init from firebase
               scenePromise.resolve({
