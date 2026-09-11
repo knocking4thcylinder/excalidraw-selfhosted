@@ -1164,7 +1164,11 @@ const ExcalidrawWrapper = () => {
         />
 
         {isRoomsRoute && (
-          <RoomsPage collabAPI={collabAPI} onClose={onRoomsClose} />
+          <RoomsPage
+            collabAPI={collabAPI}
+            excalidrawAPI={excalidrawAPI}
+            onClose={onRoomsClose}
+          />
         )}
 
         <AppSidebar />

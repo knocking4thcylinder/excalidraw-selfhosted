@@ -11,7 +11,12 @@ import {
   playerStopFilledIcon,
   share,
 } from "@excalidraw/excalidraw/components/icons";
+import { CaptureUpdateAction } from "@excalidraw/excalidraw";
 import { useExcalidrawContainer } from "@excalidraw/excalidraw/components/App";
+import {
+  restoreAppState,
+  restoreElements,
+} from "@excalidraw/excalidraw/data/restore";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { APP_NAME, KEYS } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
@@ -29,6 +34,8 @@ import { JoinRoom } from "../share/JoinRoom";
 import { closeRoomsPage, getRoomPageLink } from "./roomsRoute";
 import "./RoomsPage.scss";
 
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+
 import type { CollabAPI } from "../collab/Collab";
 
 // Standalone rooms manager: switch/create/join/rename/delete/share rooms.
@@ -38,9 +45,11 @@ import type { CollabAPI } from "../collab/Collab";
 // WebView.
 export const RoomsPage = ({
   collabAPI,
+  excalidrawAPI,
   onClose,
 }: {
   collabAPI: CollabAPI | null;
+  excalidrawAPI: ExcalidrawImperativeAPI | null;
   onClose: () => void;
 }) => {
   const { t } = useI18n();
@@ -106,8 +115,26 @@ export const RoomsPage = ({
     }
   };
 
+  // Paint a freshly joined room. startCollaboration() only resolves the
+  // scene — unlike the initial boot path, nothing applies it to the canvas
+  // for us (pushState doesn't fire hashchange, so App's handler never runs).
+  const paintScene = (
+    api: ExcalidrawImperativeAPI,
+    scene: Awaited<ReturnType<NonNullable<CollabAPI>["startCollaboration"]>>,
+  ) => {
+    if (scene) {
+      api.updateScene({
+        elements: restoreElements(scene.elements, null, {
+          repairBindings: true,
+        }),
+        appState: restoreAppState(scene.appState, api.getAppState()),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    }
+  };
+
   const openRoom = async (room: { roomId: string; roomKey: string }) => {
-    if (!collabAPI) {
+    if (!collabAPI || !excalidrawAPI) {
       return;
     }
     // Hash navigation alone can't switch: startCollaboration() early-returns
@@ -118,10 +145,11 @@ export const RoomsPage = ({
       APP_NAME,
       getCollaborationLink({ roomId: room.roomId, roomKey: room.roomKey }),
     );
-    await collabAPI.startCollaboration({
+    const scene = await collabAPI.startCollaboration({
       roomId: room.roomId,
       roomKey: room.roomKey,
     });
+    paintScene(excalidrawAPI, scene);
     // pushState doesn't fire hashchange, so hide the page explicitly.
     onClose();
   };
@@ -132,11 +160,12 @@ export const RoomsPage = ({
     }
     setActionError(null);
     stopSilently();
-    const scene = await collabAPI.startCollaboration(null);
+    await collabAPI.startCollaboration(null);
     // startCollaboration pushStates the new #room= link itself (no hashchange
-    // event), so hide the page explicitly. A null return means the socket
-    // still exists and nothing was created.
-    if (scene !== null) {
+    // event), so hide the page explicitly. A brand-new room resolves null
+    // (nothing to load) while the current canvas becomes its content — the
+    // live session is what matters, so check that instead of the scene.
+    if (collabAPI.isCollaborating()) {
       onClose();
     } else {
       setActionError(t("myRooms.createError"));
