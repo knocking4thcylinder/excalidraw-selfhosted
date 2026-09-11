@@ -151,10 +151,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   // (double-mount/double-effect on boot): while set, a newcomer to the SAME
   // room awaits it instead of resolving null instantly and winning the race
   // with a permanently empty canvas (incident 2026-09-11).
+  // NOTE: the room is captured separately because portal.roomId is only set
+  // later inside portal.open() — the race happens earlier, while the shared
+  // socket.io import is still loading.
   private pendingScenePromise: ResolvablePromise<
     | (ImportedDataState & { elements: readonly OrderedExcalidrawElement[] })
     | null
   > | null = null;
+  private pendingSceneRoomId: string | null = null;
   private lastBroadcastedOrReceivedSceneVersion: number = -1;
   private collaborators = new Map<SocketId, Collaborator>();
   /** the socket ids of the users following the current user */
@@ -511,7 +515,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (this.portal.socket) {
       if (
         this.pendingScenePromise &&
-        this.portal.roomId === existingRoomLinkData?.roomId
+        existingRoomLinkData &&
+        this.pendingSceneRoomId === existingRoomLinkData.roomId
       ) {
         return this.pendingScenePromise;
       }
@@ -542,9 +547,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     // shares it (see pendingScenePromise). Cleared on settle; later calls
     // fall back to the historical null behavior.
     this.pendingScenePromise = scenePromise;
+    this.pendingSceneRoomId = existingRoomLinkData?.roomId ?? null;
     const clearPendingScene = () => {
       if (this.pendingScenePromise === scenePromise) {
         this.pendingScenePromise = null;
+        this.pendingSceneRoomId = null;
       }
     };
     scenePromise.then(clearPendingScene, clearPendingScene);
