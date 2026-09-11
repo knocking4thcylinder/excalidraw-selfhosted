@@ -412,7 +412,8 @@
     "sceneContent": "Scene content:"
   },
   "shareDialog": {
-    "or": "Or"
+    "or": "Or",
+    "moreOptions": "More options"
   },
   "roomDialog": {
     "desc_intro": "Invite people to collaborate on your drawing.",

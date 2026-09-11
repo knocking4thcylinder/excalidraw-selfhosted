@@ -412,7 +412,8 @@
     "sceneContent": "Содержание сцены:"
   },
   "shareDialog": {
-    "or": "Или"
+    "or": "Или",
+    "moreOptions": "Дополнительно"
   },
   "roomDialog": {
     "desc_intro": "Пригласить людей для участия в рисовании.",

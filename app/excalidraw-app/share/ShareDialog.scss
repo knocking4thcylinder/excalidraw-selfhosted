@@ -40,6 +40,23 @@
       opacity: 0.75;
     }
 
+    // seldom-used rows (display name, QR) hide behind a native disclosure
+    &__more {
+      border-top: 1px solid var(--dialog-border-color);
+      padding-top: 0.75rem;
+
+      summary {
+        cursor: pointer;
+        font-size: 0.9em;
+        opacity: 0.75;
+        user-select: none;
+      }
+
+      .TextField {
+        margin-top: 0.75rem;
+      }
+    }
+
     // keep the active dialog row from overflowing on narrow screens
     &__active__linkRow {
       display: flex;

@@ -5,9 +5,7 @@ import { FilledButton } from "@excalidraw/excalidraw/components/FilledButton";
 import { TextField } from "@excalidraw/excalidraw/components/TextField";
 import {
   copyIcon,
-  LinkIcon,
   playerPlayIcon,
-  playerStopFilledIcon,
   share,
   shareIOS,
   shareWindows,
@@ -16,7 +14,7 @@ import {
 import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
 import { useCopyStatus } from "@excalidraw/excalidraw/hooks/useCopiedIndicator";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
-import { APP_NAME, KEYS, getFrame } from "@excalidraw/common";
+import { KEYS, getFrame } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
 
 import { atom, useAtom, useAtomValue } from "../app-jotai";
@@ -24,7 +22,6 @@ import { activeRoomLinkAtom } from "../collab/Collab";
 import { openRoomsPage } from "../rooms/roomsRoute";
 
 import "./ShareDialog.scss";
-import { JoinRoom } from "./JoinRoom";
 import { QRCode } from "./QRCode";
 
 import type { CollabAPI } from "../collab/Collab";
@@ -139,13 +136,6 @@ const ActiveRoomDialog = ({
       <h3 className="ShareDialog__active__header">
         {t("labels.liveCollaboration").replace(/\./g, "")}
       </h3>
-      <TextField
-        defaultValue={collabAPI.getUsername()}
-        placeholder="Your name"
-        label="Your name"
-        onChange={collabAPI.setUsername}
-        onKeyDown={(event) => event.key === KEYS.ENTER && handleClose()}
-      />
       <div className="ShareDialog__active__linkRow">
         <TextField
           ref={ref}
@@ -176,7 +166,6 @@ const ActiveRoomDialog = ({
           }}
         />
       </div>
-      <QRCode value={activeRoomLink} />
 
       {roomCode && (
         <div className="ShareDialog__roomCode">
@@ -197,26 +186,22 @@ const ActiveRoomDialog = ({
         </div>
       )}
       {roomCode && (
-        <div className="ShareDialog__active__description">
-          <p className="ShareDialog__roomCodeHint">
-            {t("roomDialog.roomCodeHint")}
-          </p>
-        </div>
+        <p className="ShareDialog__roomCodeHint">
+          {t("roomDialog.roomCodeHint")}
+        </p>
       )}
 
-      <div className="ShareDialog__active__description">
-        <p>
-          <span
-            role="img"
-            aria-hidden="true"
-            className="ShareDialog__active__description__emoji"
-          >
-            🔒{" "}
-          </span>
-          {t("roomDialog.desc_privacy")}
-        </p>
-        <p>{t("roomDialog.desc_exitSession")}</p>
-      </div>
+      <details className="ShareDialog__more">
+        <summary>{t("shareDialog.moreOptions")}</summary>
+        <TextField
+          defaultValue={collabAPI.getUsername()}
+          placeholder="Your name"
+          label="Your name"
+          onChange={collabAPI.setUsername}
+          onKeyDown={(event) => event.key === KEYS.ENTER && handleClose()}
+        />
+        <QRCode value={activeRoomLink} />
+      </details>
 
       <div className="ShareDialog__active__actions">
         <FilledButton
@@ -227,23 +212,11 @@ const ActiveRoomDialog = ({
             trackEvent("share", "room exited to list");
             // silent teardown (no confirm): the user explicitly asked to
             // leave, and the Rooms page is the destination, not bare canvas.
+            // Full stop (with confirm) stays available via the command
+            // palette / hamburger menu.
             collabAPI.stopCollaboration(false);
             openRoomsPage(window);
             handleClose();
-          }}
-        />
-        <FilledButton
-          size="large"
-          variant="outlined"
-          color="danger"
-          label={t("roomDialog.button_stopSession")}
-          icon={playerStopFilledIcon}
-          onClick={() => {
-            trackEvent("share", "room closed");
-            collabAPI.stopCollaboration();
-            if (!collabAPI.isCollaborating()) {
-              handleClose();
-            }
           }}
         />
       </div>
@@ -256,6 +229,9 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
 
   const { collabAPI } = props;
 
+  // Picker does one job: start a session, or hand off to the Rooms page
+  // (join by link/code, browse/rename/delete rooms). Joining, the room list
+  // and the backend export link live there / in Export — not duplicated here.
   const startCollabJSX = collabAPI ? (
     <>
       <div className="ShareDialog__picker__header">
@@ -263,8 +239,7 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
       </div>
 
       <div className="ShareDialog__picker__description">
-        <div style={{ marginBottom: "1em" }}>{t("roomDialog.desc_intro")}</div>
-        {t("roomDialog.desc_privacy")}
+        {t("roomDialog.desc_intro")}
       </div>
 
       <div className="ShareDialog__picker__button">
@@ -279,33 +254,6 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
         />
       </div>
 
-      <div className="ShareDialog__separator">
-        <span>{t("shareDialog.or")}</span>
-      </div>
-
-      <div className="ShareDialog__picker__description">
-        {t("roomDialog.desc_joinIntro")}
-      </div>
-
-      <div className="ShareDialog__picker__button">
-        <JoinRoom
-          onJoin={(linkData) => {
-            trackEvent("share", "room join", `ui (${getFrame()})`);
-            window.history.pushState(
-              {},
-              APP_NAME,
-              `${window.location.origin}${window.location.pathname}#room=${linkData.roomId},${linkData.roomKey}`,
-            );
-            collabAPI.startCollaboration(linkData);
-            props.handleClose();
-          }}
-        />
-      </div>
-
-      <div className="ShareDialog__separator">
-        <span>{t("myRooms.title")}</span>
-      </div>
-
       <div className="ShareDialog__picker__button">
         <FilledButton
           size="large"
@@ -318,43 +266,10 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
           }}
         />
       </div>
-
-      {props.type === "share" && (
-        <div className="ShareDialog__separator">
-          <span>{t("shareDialog.or")}</span>
-        </div>
-      )}
     </>
   ) : null;
 
-  return (
-    <>
-      {startCollabJSX}
-
-      {props.type === "share" && (
-        <>
-          <div className="ShareDialog__picker__header">
-            {t("exportDialog.link_title")}
-          </div>
-          <div className="ShareDialog__picker__description">
-            {t("exportDialog.link_details")}
-          </div>
-
-          <div className="ShareDialog__picker__button">
-            <FilledButton
-              size="large"
-              label={t("exportDialog.link_button")}
-              icon={LinkIcon}
-              onClick={async () => {
-                await props.onExportToBackend();
-                props.handleClose();
-              }}
-            />
-          </div>
-        </>
-      )}
-    </>
-  );
+  return <>{startCollabJSX}</>;
 };
 
 const ShareDialogInner = (props: ShareDialogProps) => {
