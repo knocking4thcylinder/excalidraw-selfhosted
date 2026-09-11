@@ -142,6 +142,30 @@ read credential for this private repo; otherwise sync files from the Mac).
 | Mac network fixes | `sudo bash ~/src/excalidraw-deck/mac/install-mac.sh` |
 | Android APK build + install | `cd android && ./build.sh && adb install -r build/Excalidraw.apk` |
 
+## Incident 2026-09-11: rooms opened empty (root causes, all fixed)
+
+1. **Boot race — double `startCollaboration`, null wins** (`app/.../Collab.tsx`).
+   On boot the dialog fires twice ~20ms apart. The 2nd call saw the fresh
+   socket and resolved `null` instantly, beating the real snapshot load, so
+   the canvas stayed empty forever. Fix: an in-flight load for the SAME room
+   is now shared (`pendingScenePromise` + `pendingSceneRoomId`, captured
+   synchronously — `portal.roomId` is assigned too late, after the
+   socket.io import). Different-room and settled-load behavior unchanged.
+2. **Ghost campers fed empty INITs.** Stale tabs with empty scenes held rooms
+   open; joiners resolved to their empty INIT and discarded the snapshot
+   (resolved promises can't be un-resolved). Fix: an empty reconciled INIT
+   now falls back to the stored snapshot; live non-empty content still wins.
+3. **Duplicate rootless `excalidraw-room` container** fought the canonical
+   root one for `:3002` (crash loop). Never run bare `podman` on the Deck —
+   always `sudo podman` (rootless + root runtimes share host networking).
+   Fixed + `/etc/sudoers.d/deck-podman` (NOPASSWD podman/systemctl/tee).
+4. **Stale bundles pinned by HTTP cache.** `index.html` is now `no-store`,
+   hashed assets `immutable` (entrypoint injects the nginx policy).
+5. **Monorepo.** The fork is `app/` (subtree, full history); the Deck's
+   `~/excalidraw` IS this repo. No bundles. `excalidraw-selfhosted-fork`
+   remote is frozen; local `../excalidraw-fork` remains the upstream-tracking
+   clone (`git subtree pull --prefix=app …` for upstream updates).
+
 ## Known trade-offs / gotchas worth inches if extending
 
 - **Server-side scene persistence is one encrypted snapshot per room** (the My
