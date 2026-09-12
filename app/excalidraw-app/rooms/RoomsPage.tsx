@@ -21,6 +21,8 @@ import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { APP_NAME, KEYS } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
 
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+
 import { getCollaborationLink, getCollaborationLinkData } from "../data";
 import {
   deleteRoom,
@@ -33,8 +35,6 @@ import { JoinRoom } from "../share/JoinRoom";
 
 import { closeRoomsPage, getRoomPageLink } from "./roomsRoute";
 import "./RoomsPage.scss";
-
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
 import type { CollabAPI } from "../collab/Collab";
 
@@ -140,6 +140,11 @@ export const RoomsPage = ({
     // Hash navigation alone can't switch: startCollaboration() early-returns
     // while the old socket exists, so tear it down first (no confirm).
     stopSilently();
+    // Clear the old room's canvas up front: the join below preserves
+    // unsynced canvas content for offline recovery, which must never leak
+    // across rooms. (createRoom intentionally keeps it: the canvas seeds
+    // the new room.)
+    excalidrawAPI.updateScene({ elements: [] });
     ownerWindow.history.pushState(
       {},
       APP_NAME,

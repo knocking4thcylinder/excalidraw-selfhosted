@@ -106,6 +106,13 @@ import type {
 export const collabAPIAtom = atom<CollabAPI | null>(null);
 export const isCollaboratingAtom = atom(false);
 export const isOfflineAtom = atom(false);
+// Set when a room join finds no server (offline boot): the canvas keeps
+// local-only work, local persistence resumes, and the banner offers the
+// pending state. Cleared on the first successful server contact.
+export const offlineRoomPendingAtom = atom<{
+  roomId: string;
+  roomKey: string;
+} | null>(null);
 
 interface CollabState {
   errorMessage: string | null;
@@ -147,6 +154,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   idleTimeoutId: number | null;
 
   private socketInitializationTimer?: number;
+  // True while the initial scene promise is already spent (empty) but an
+  // offline canvas may still receive its scene late: late arrivals must
+  // paint directly instead of relying on resolve(). Set on offline entry,
+  // cleared on the first successful load/save/stop.
+  private offlineRecoveryPending = false;
   // Scene load shared with a second startCollaboration() racing the first
   // (double-mount/double-effect on boot): while set, a newcomer to the SAME
   // room awaits it instead of resolving null instantly and winning the race
@@ -343,6 +355,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   saveCollabRoomToFirebase = async (
     syncableElements: readonly SyncableExcalidrawElement[],
   ) => {
+    // While an offline recovery is pending, the canvas holds state the
+    // server hasn't seen merged yet — pushing it now would overwrite the
+    // good snapshot with a partial one. The merged scene saves itself once
+    // recovery paints (plus the empty-overwrite guards still apply).
+    if (this.offlineRecoveryPending) {
+      return;
+    }
     syncableElements = cloneJSON(syncableElements);
     // self-hosted fork: mirror every save to the /api/rooms registry (always
     // on, unlike the env-gated firebase save below). Fire-and-forget —
@@ -387,6 +406,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   stopCollaboration = (keepRemoteState = true) => {
+    // Leaving abandons any pending offline recovery for the old room.
+    this.clearOfflinePending();
     this.queueBroadcastAllElements.cancel();
     this.queueSaveToFirebase.cancel();
     this.loadImageFiles.cancel();
@@ -668,6 +689,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
                   this.setLastBroadcastedOrReceivedSceneVersion(
                     getSceneVersion(savedElements),
                   );
+                  await this.paintOfflineRecovery(savedElements);
+                  this.clearOfflinePending();
                   scenePromise.resolve({
                     elements: savedElements,
                     scrollToContent: true,
@@ -804,54 +827,108 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       );
     }
     if (fetchScene && roomLinkData && this.portal.socket) {
-      this.excalidrawAPI.resetScene();
+      // Offline-first: load first, then decide wipe vs merge. resetScene()
+      // upfront would destroy offline-drawn strokes that no server copy
+      // holds yet; the explicit switch paths (Rooms open, hashchange) wipe
+      // the canvas themselves before starting.
+      const loadFromServerFirst = async () => {
+        try {
+          const elements = await loadFromFirebase(
+            roomLinkData.roomId,
+            roomLinkData.roomKey,
+            this.portal.socket,
+          );
+          if (elements) {
+            return elements;
+          }
+        } catch (error: any) {
+          // log the error and move on. other peers will sync us the scene.
+          console.error(error);
+        } finally {
+          this.portal.socketInitialized = true;
+        }
 
-      try {
-        const elements = await loadFromFirebase(
+        // self-hosted fork: fall back to the /api/rooms snapshot when
+        // firebase has nothing (or is disabled). Returns null on any
+        // failure, in which case other peers will sync us the scene.
+        return await loadRoomFromServer(
           roomLinkData.roomId,
           roomLinkData.roomKey,
           this.portal.socket,
         );
-        if (elements) {
-          this.setLastBroadcastedOrReceivedSceneVersion(
-            getSceneVersion(elements),
-          );
+      };
 
-          return {
-            elements,
-            scrollToContent: true,
-          };
-        }
-      } catch (error: any) {
-        // log the error and move on. other peers will sync us the scene.
-        console.error(error);
-      } finally {
-        this.portal.socketInitialized = true;
-      }
-
-      // self-hosted fork: fall back to the /api/rooms snapshot when firebase
-      // has nothing (or is disabled). Returns null on any failure, in which
-      // case other peers will sync us the scene.
-      const serverElements = await loadRoomFromServer(
-        roomLinkData.roomId,
-        roomLinkData.roomKey,
-        this.portal.socket,
-      );
-      if (serverElements) {
+      const elements = await loadFromServerFirst();
+      if (elements) {
+        this.excalidrawAPI.resetScene();
         this.setLastBroadcastedOrReceivedSceneVersion(
-          getSceneVersion(serverElements),
+          getSceneVersion(elements),
         );
+        await this.paintOfflineRecovery(elements);
+        this.clearOfflinePending();
 
         return {
-          elements: serverElements,
+          elements,
           scrollToContent: true,
         };
       }
+
+      // Load failed. If the socket never connected, the server is
+      // unreachable: enter offline mode instead of resolving to an empty
+      // canvas that would reads as "room is empty". Local work keeps
+      // accumulating in the canvas (persisted via resumed local save) and
+      // merges on recovery. A connected socket with no snapshot is just an
+      // empty/new room — resolve null as before.
+      if (!this.portal.socket.connected) {
+        this.enterOfflineRoomMode(roomLinkData);
+        return null;
+      }
+      this.excalidrawAPI.resetScene();
     } else {
       this.portal.socketInitialized = true;
     }
     return null;
   };
+
+  // Offline-first support (tablet without network). Called when a room join
+  // finds no reachable server: keep the canvas (it may hold offline work),
+  // persist locally, and flag the pending state for banner + recovery.
+  private enterOfflineRoomMode(roomLinkData: {
+    roomId: string;
+    roomKey: string;
+  }) {
+    this.offlineRecoveryPending = true;
+    appJotaiStore.set(offlineRoomPendingAtom, { ...roomLinkData });
+    LocalData.resumeSave("collaboration");
+  }
+
+  private clearOfflinePending() {
+    this.offlineRecoveryPending = false;
+    appJotaiStore.set(offlineRoomPendingAtom, null);
+  }
+
+  // A late-arriving scene after the initial promise already resolved (empty)
+  // must still reach the canvas: resolve() would be a noop. Merges with
+  // whatever was drawn offline and paints directly. No-op unless an offline
+  // recovery is actually pending.
+  private async paintOfflineRecovery(
+    elements: readonly SyncableExcalidrawElement[],
+  ): Promise<void> {
+    if (!this.offlineRecoveryPending) {
+      return;
+    }
+    this.clearOfflinePending();
+    // Syncable and Remote share structure; only the brand differs, and the
+    // reconciler immediately restores + rebrands anyway.
+    const merged = this._reconcileElements(
+      elements as unknown as readonly RemoteExcalidrawElement[],
+    );
+    this.setLastBroadcastedOrReceivedSceneVersion(getSceneVersion(merged));
+    this.excalidrawAPI.updateScene({
+      elements: merged,
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+  }
 
   private _reconcileElements = (
     remoteElements: readonly RemoteExcalidrawElement[],

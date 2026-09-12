@@ -98,6 +98,7 @@ import Collab, {
   collabAPIAtom,
   isCollaboratingAtom,
   isOfflineAtom,
+  offlineRoomPendingAtom,
   userToFollowAtom,
 } from "./collab/Collab";
 import { AppFooter } from "./components/AppFooter";
@@ -621,6 +622,13 @@ const ExcalidrawWrapper = () => {
         }
         excalidrawAPI.updateScene({ appState: { isLoading: true } });
 
+        // Same wipe-before-switch as RoomsPage.openRoom, but only when the
+        // destination is a room: the join preserves unsynced canvas content
+        // for offline recovery, which must never leak across rooms.
+        // Navigating home keeps the local canvas (and any offline work).
+        if (getCollaborationLinkData(window.location.href)) {
+          excalidrawAPI.updateScene({ elements: [] });
+        }
         initializeScene({ collabAPI, excalidrawAPI }).then((data) => {
           loadImages(data);
           if (data.scene) {
@@ -871,6 +879,7 @@ const ExcalidrawWrapper = () => {
   };
 
   const isOffline = useAtomValue(isOfflineAtom);
+  const offlinePendingRoom = useAtomValue(offlineRoomPendingAtom);
 
   const localStorageQuotaExceeded = useAtomValue(localStorageQuotaExceededAtom);
 
@@ -1130,9 +1139,11 @@ const ExcalidrawWrapper = () => {
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />
-        {isCollaborating && isOffline && (
+        {((isCollaborating && isOffline) || offlinePendingRoom) && (
           <div className="alertalert--warning">
-            {t("alerts.collabOfflineWarning")}
+            {offlinePendingRoom
+              ? t("alerts.collabOfflinePendingSync")
+              : t("alerts.collabOfflineWarning")}
           </div>
         )}
         {localStorageQuotaExceeded && (

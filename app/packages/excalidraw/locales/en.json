@@ -285,6 +285,7 @@
     "removeItemsFromsLibrary": "Delete {{count}} item(s) from library?",
     "invalidEncryptionKey": "Encryption key must be of 22 characters. Live collaboration is disabled.",
     "collabOfflineWarning": "No internet connection available.\nYour changes will not be saved!",
+    "collabOfflinePendingSync": "Offline — changes are saved on this device and will sync when you reconnect.",
     "localStorageQuotaExceeded": "Browser storage quota exceeded. Changes will not be saved."
   },
   "errors": {

@@ -13,6 +13,7 @@ import type {
 
 import { WS_EVENTS, FILE_UPLOAD_TIMEOUT, WS_SUBTYPES } from "../app_constants";
 import { isSyncableElement } from "../data";
+import { registerRoom } from "../data/rooms";
 
 import type {
   SocketUpdateData,
@@ -44,6 +45,12 @@ class Portal {
       if (this.socket) {
         this.socket.emit("join-room", this.roomId);
         trackEvent("share", "room joined");
+        // (Re)touch the registry on every connect: rooms created offline
+        // or rooms whose register call died with the network self-heal
+        // here. Idempotent server-side (touch when key matches).
+        if (this.roomId && this.roomKey) {
+          registerRoom(this.roomId, this.roomKey);
+        }
       }
     });
     this.socket.on("new-user", async (_socketId: string) => {
