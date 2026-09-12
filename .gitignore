@@ -1,4 +1,7 @@
 fork.bundle
+# upstream-tracking clone of excalidraw-selfhosted-fork (nested repo used
+# for `git subtree pull --prefix=app` archaeology, not part of this repo)
+excalidraw-fork/
 # Deck runtime files (live in ~/excalidraw next to the checkout, never committed)
 shortcode-server.js
 shortcode-data/

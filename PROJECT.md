@@ -123,7 +123,7 @@ read credential for this private repo; otherwise sync files from the Mac).
 - **MacBook** (`macbook`, `100.64.0.11`)
   - route-fixer daemon loaded as `user.fixtsroutes`
   - `/etc/hosts` entry `steamdeck.example.ts.net → 100.64.0.10`
-  - `~/src/excalidraw-deck/` ← the packaging repo on disk
+  - `~/src/excalidraw/` ← this repo on disk (monorepo)
 - **Steam Deck** (`steamdeck`, `100.64.0.10`) — runs the live stack; has
   passwordless `sudo podman` via `/etc/sudoers.d/deck-podman` (they ran the
   chmod). `/home/excalidraw/install.sh` matches the repo (md5 equal).
@@ -139,7 +139,7 @@ read credential for this private repo; otherwise sync files from the Mac).
 | Deck (first ever run) | `sudo steamos-readonly disable` then `bash ~/excalidraw/install.sh` |
 | Deck (after fork/image change) | `bash ~/excalidraw/redeploy-fork.sh` |
 | Post-OS-update wipe on Deck | `bash ~/excalidraw/reinstall.sh` (just calls install.sh) |
-| Mac network fixes | `sudo bash ~/src/excalidraw-deck/mac/install-mac.sh` |
+| Mac network fixes | `sudo bash ~/src/excalidraw/mac/install-mac.sh` |
 | Android APK build + install | `cd android && ./build.sh && adb install -r build/Excalidraw.apk` |
 
 ## Incident 2026-09-11: rooms opened empty (root causes, all fixed)
@@ -163,8 +163,9 @@ read credential for this private repo; otherwise sync files from the Mac).
    hashed assets `immutable` (entrypoint injects the nginx policy).
 5. **Monorepo.** The fork is `app/` (subtree, full history); the Deck's
    `~/excalidraw` IS this repo. No bundles. `excalidraw-selfhosted-fork`
-   remote is frozen; local `../excalidraw-fork` remains the upstream-tracking
-   clone (`git subtree pull --prefix=app …` for upstream updates).
+   remote is frozen; local `./excalidraw-fork` (nested, gitignored) remains
+   the upstream-tracking clone (`git subtree pull --prefix=app …` for
+   upstream updates). Repo lives at `~/src/excalidraw/`.
 
 ## Known trade-offs / gotchas worth inches if extending
 
