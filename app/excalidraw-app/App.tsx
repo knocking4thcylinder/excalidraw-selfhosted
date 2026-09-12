@@ -1094,6 +1094,9 @@ const ExcalidrawWrapper = () => {
         <AppMainMenu
           onCollabDialogOpen={onCollabDialogOpen}
           onRoomsOpen={onRoomsOpen}
+          onStopSession={() => {
+            collabAPI?.stopCollaboration();
+          }}
           isCollaborating={isCollaborating}
           isCollabEnabled={!isCollabDisabled}
           theme={appTheme}

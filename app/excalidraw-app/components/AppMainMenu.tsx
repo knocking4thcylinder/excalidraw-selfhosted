@@ -2,6 +2,7 @@ import {
   loginIcon,
   ExcalLogo,
   eyeIcon,
+  playerStopFilledIcon,
   usersIcon,
 } from "@excalidraw/excalidraw/components/icons";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
@@ -20,6 +21,7 @@ import { saveDebugState } from "./DebugCanvas";
 export const AppMainMenu: React.FC<{
   onCollabDialogOpen: () => any;
   onRoomsOpen: () => any;
+  onStopSession: () => any;
   isCollaborating: boolean;
   isCollabEnabled: boolean;
   theme: Theme | "system";
@@ -41,6 +43,14 @@ export const AppMainMenu: React.FC<{
       {props.isCollabEnabled && (
         <MainMenu.Item icon={usersIcon} onSelect={() => props.onRoomsOpen()}>
           {t("myRooms.title")}
+        </MainMenu.Item>
+      )}
+      {props.isCollabEnabled && props.isCollaborating && (
+        <MainMenu.Item
+          icon={playerStopFilledIcon}
+          onSelect={() => props.onStopSession()}
+        >
+          {t("roomDialog.button_stopSession")}
         </MainMenu.Item>
       )}
       <MainMenu.DefaultItems.CommandPalette className="highlighted" />
