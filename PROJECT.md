@@ -145,12 +145,16 @@ read credential for this private repo; otherwise sync files from the Mac).
 ## Incident 2026-09-11: rooms opened empty (root causes, all fixed)
 
 1. **Boot race — double `startCollaboration`, null wins** (`app/.../Collab.tsx`).
-   On boot the dialog fires twice ~20ms apart. The 2nd call saw the fresh
-   socket and resolved `null` instantly, beating the real snapshot load, so
-   the canvas stayed empty forever. Fix: an in-flight load for the SAME room
-   is now shared (`pendingScenePromise` + `pendingSceneRoomId`, captured
-   synchronously — `portal.roomId` is assigned too late, after the
-   socket.io import). Different-room and settled-load behavior unchanged.
+   On boot the mount effect fires twice ~20ms apart with identical deps.
+   Root cause, proven by tracing: the effect depends on `activeRoomLink`,
+   which flips empty → room URL as a *consequence* of the first call
+   (`setActiveRoomLink` in `startCollaboration`), self-triggering run #2.
+   Run #2 sees the fresh socket and resolves `null` instantly, beating the
+   real snapshot load, so the canvas stayed empty forever. Fix: an in-flight
+   load for the SAME room is now shared (`pendingScenePromise` +
+   `pendingSceneRoomId`, captured synchronously — `portal.roomId` is
+   assigned too late, after the socket.io import). Different-room and
+   settled-load behavior unchanged.
 2. **Ghost campers fed empty INITs.** Stale tabs with empty scenes held rooms
    open; joiners resolved to their empty INIT and discarded the snapshot
    (resolved promises can't be un-resolved). Fix: an empty reconciled INIT
