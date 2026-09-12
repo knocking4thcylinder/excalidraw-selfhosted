@@ -168,4 +168,49 @@ describe("offline-first rooms", () => {
 
     localStorage.clear();
   }, 120000);
+
+  it("failed load while offline never wipes the canvas", async () => {
+    // server unreachable again for this leg (previous test left a canned
+    // snapshot behind in the shared holder).
+    loadHolder.impl = async () => null;
+
+    await render(<ExcalidrawApp />);
+
+    const { CaptureUpdateAction: CUA } = await import("@excalidraw/excalidraw");
+    await act(async () => {
+      API.updateScene({
+        elements: [seedRect as any],
+        captureUpdate: CUA.NEVER,
+      } as any);
+    });
+    await waitFor(() => {
+      expect(
+        (h.elements.map((e: any) => e.id) as string[]).includes(
+          "offline-seed-rect",
+        ),
+      ).toBe(true);
+    });
+
+    // second failing load (still offline, socket dead): canvas must survive
+    await act(async () => {
+      await (window.collab as any).initializeRoom({
+        fetchScene: true,
+        roomLinkData: { roomId: ROOM_ID, roomKey: ROOM_KEY },
+      });
+    });
+
+    expect(h.elements.map((e: any) => e.id)).toContain("offline-seed-rect");
+    expect(appJotaiStore.get(offlineRoomPendingAtom)).toEqual({
+      roomId: ROOM_ID,
+      roomKey: ROOM_KEY,
+    });
+    // offline work reaches local persistence
+    await waitFor(() => {
+      expect(localStorage.getItem("excalidraw") || "").toContain(
+        "offline-seed-rect",
+      );
+    });
+
+    localStorage.clear();
+  }, 120000);
 });
