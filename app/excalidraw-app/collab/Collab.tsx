@@ -860,7 +860,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
       const elements = await loadFromServerFirst();
       if (elements) {
-        this.excalidrawAPI.resetScene();
+        // Offline recovery reads the canvas below, so the wipe must wait:
+        // reset only the clean (non-recovery) path. Recovery paints the
+        // merged scene itself via paintOfflineRecovery.
+        if (!this.offlineRecoveryPending) {
+          this.excalidrawAPI.resetScene();
+        }
         this.setLastBroadcastedOrReceivedSceneVersion(
           getSceneVersion(elements),
         );
