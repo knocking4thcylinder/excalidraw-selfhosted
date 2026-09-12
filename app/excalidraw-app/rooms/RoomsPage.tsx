@@ -329,6 +329,10 @@ export const RoomsPage = ({
                     key={room.roomId}
                     className={`RoomsPage__row${
                       isActive ? " RoomsPage__row--active" : ""
+                    }${
+                      isEditing || isConfirmingDelete || isSharing
+                        ? " RoomsPage__row--busy"
+                        : ""
                     }`}
                   >
                     <div className="RoomsPage__rowMain">

@@ -98,6 +98,10 @@
       gap: 0.6rem;
       align-items: center;
 
+      &:hover {
+        background-color: var(--button-hover-bg, rgba(0, 0, 0, 0.03));
+      }
+
       &--active {
         border-color: var(--color-primary);
       }
@@ -159,12 +163,30 @@
       }
     }
 
+    // row actions (rename/share/delete) reveal on hover, focus or while
+    // the row is busy (editing/confirming/sharing) — a wall of icon
+    // buttons on every row is visual noise. Touch layouts have no hover,
+    // so the actions stay put there.
     &__rowActions {
       display: flex;
       gap: 0.25rem;
       margin-left: auto;
       align-self: center;
       flex-shrink: 0;
+      opacity: 0;
+      transition: opacity 0.12s ease-in;
+    }
+
+    &__row:hover &__rowActions,
+    &__row:focus-within &__rowActions,
+    &__row--busy &__rowActions {
+      opacity: 1;
+    }
+
+    @media (hover: none) {
+      &__rowActions {
+        opacity: 1;
+      }
     }
 
     &__actionButton {
