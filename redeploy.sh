@@ -28,7 +28,10 @@ sudo podman run -d --name excalidraw-shortcode --restart always --network host \
   docker.io/library/node:20-alpine node /srv/server.js
 
 echo "== 4/5 caddy route update + restart =="
-FQDN=$(tailscale status --json | grep -o '"DNSName": *"steamdeck[^"]*"' | head -1 | sed 's/.*: *"//; s/"$//; s/\.$//')
+if [ -z "${FQDN:-}" ]; then
+  FQDN=$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)
+fi
+[ -z "${FQDN:-}" ] && { echo "ERROR: cannot determine MagicDNS name (export FQDN)"; exit 1; }
 cat > "$BASE/Caddyfile" <<CDATA
 $FQDN:8443 {
   tls /certs/$FQDN.crt /certs/$FQDN.key

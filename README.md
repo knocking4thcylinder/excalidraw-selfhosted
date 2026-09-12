@@ -1,19 +1,18 @@
-# Excalidraw self-hosted: Steam Deck + Android tablet + MacBook
+# Excalidraw self-hosted (generic Linux)
 
-Self-hosted collaborative whiteboard. **Excalidraw (app + collab room) runs on a
-Steam Deck** under podman; all devices reach it over the tailnet via HTTPS
-(Tailscale-issued cert). Room sharing supports a **short code** (e.g. `7QU6-38SK`)
-in addition to the full link; the Join-room UI and all new strings ship inside the
-[forked Excalidraw build](https://github.com/knocking4thcylinder/excalidraw-selfhosted-fork).
-
-Draw with a stylus on the Android tablet, mirrored live on any device in the tailnet.
+Self-hosted collaborative whiteboard. The Excalidraw web app plus its collab
+room server run in **podman containers on a generic Linux host**; all devices
+reach it over the tailnet via HTTPS (Tailscale-issued cert). Room sharing
+supports a **short code** (e.g. `7QU6-38SK`) in addition to the full link; the
+Join-room UI and all new strings ship inside the forked Excalidraw build
+under `app/`.
 
 ```mermaid
 %%{init:{"theme":"dark"}}%%
 graph LR
-  T[Android tablet<br/>APK wrapper, stylus] -- "per-app VPN, wss" --> D((Steam Deck))
-  M[MacBook] -- "route fixer + hosts entry" --> D
-  subgraph D [Steam Deck]
+  T[Tablet/phone browser<br/>or APK wrapper, stylus] -- "tailnet, wss" --> H((Linux host))
+  M[Second device] -- "tailnet" --> H
+  subgraph H [Linux host]
     C[Caddy :8443 TLS]
     A[excalidraw-selfhost :3000]
     R[excalidraw-room :3002]
@@ -26,31 +25,40 @@ graph LR
 
 | Path | Purpose |
 |---|---|
-| `install.sh` | **Deck**: full canonical installer — storage (vfs on `/home`), Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
-| `shortcode/server.js` | tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes) |
-| `mac/install-mac.sh` | Mac: installs the LaunchDaemon route fixer + `/etc/hosts` entry (interactive prompt for the Deck FQDN / tailnet IP) |
-| `mac/fix_ts_routes.sh` | asserts a `/32` route per tailnet peer every 20 s (beats proxy/TUN apps like Happ) |
-| `mac/com.fixtsroutes.plist` | LaunchDaemon definition (`user.fixtsroutes`) |
-| `android/build.sh` | reproducible APK build: fetches Google `cmdline-tools` on first run, compiles with `aapt2`/`javac`/`d8`, signs with a locally generated keystore |
-| `android/app/...` | fullscreen WebView (minSdk 21 — HarmonyOS 2.0 works), INTERNET only, keeps screen on, VIEW-intent for room links, remembers last URL |
+| `install.sh` | Full canonical installer on the host: container storage setup, Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
+| `redeploy.sh` | Fast path after `app/` or packaging changes: `git pull` + rebuild + container swap (run on the host from `~/excalidraw`) |
+| `shortcode/server.js` | Tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes) |
+| `app/` | Forked Excalidraw source (git subtree, full history — `git log -- app`), built into the `excalidraw-selfhost` image on the host |
+| `mac/` | Optional: Mac client route fixer (LaunchDaemon + `/etc/hosts`) for tailnets reached through proxy/TUN apps |
+| `android/` | Optional: reproducible no-gradle APK build (fullscreen WebView wrapper, minSdk 21), VIEW-intent for room links |
 
 ## URLs
 
 | From | URL |
 |---|---|
-| Anywhere on the tailnet | `https://steamdeck.example.ts.net:8443` |
+| Anywhere on the tailnet | `https://<your-host-magicdns>:8443` |
 | Room share | full link *or* short code — created via **Live Collaboration → Start session**, code shown in the dialog |
 
-## Setup, one command per device
+## Setup
+
+Prereqs on the host: `podman`, `tailscale` (logged in, MagicDNS enabled),
+`git` (`python3` for automatic FQDN detection, otherwise export `FQDN`).
 
 ```bash
-# Deck (once: sudo steamos-readonly disable)
+# on the host, from a checkout of this repo (e.g. ~/excalidraw):
 ./install.sh
 
-# Mac (needs sudo)
+# after app/packaging changes (on the host):
+bash ~/excalidraw/redeploy.sh
+```
+
+Optional clients:
+
+```bash
+# Mac route fixes (needs sudo)
 sudo ./mac/install-mac.sh
 
-# Android
+# Android APK
 cd android && ./build.sh
 adb install -r build/Excalidraw.apk
 ```
@@ -60,9 +68,6 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
 
 ## Reproduction notes (things that cost us hours — don't re-learn them)
 
-- **SteamOS `/var` is a 230 MB partition** — podman's root store must live on `/home`;
-  the `overlay` driver fails on `/home`'s FS here → installer sets **vfs** on
-  `/home/containers/storage` and frees the old `/var/lib/containers` store
 - **`crypto.subtle` needs a secure origin** — plain-IP `http://` silently breaks
   "Start session" (no exception surfaces); hence HTTPS everywhere
 - **Excalidraw's collab URL is baked into the built JS bundle** — the installer
@@ -70,42 +75,36 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
   `oss-collab.excalidraw.com` references before starting nginx
 - **Service worker removed in the fork** (Workbox/PWA plugin disabled): redeploys
   now reach clients as plain network loads — no unregister/hard-reload dance.
-  Trade-off: no offline cached app shell — acceptable for tailnet use
+  Trade-off: no offline cached app shell — acceptable for tailnet use.
+  `index.html` is served `no-store`, hashed assets `immutable`
 - **Caddy path matchers**: `/api/code/*` does not match a bare `/api/code` request —
-  hence the `*` without slash in this repo's Caddyfile
+  hence the `*` without slash in the Caddyfile
 - **Single-file bind mounts**: `sed -i` inside the Caddy container fails with
   "Resource busy" (temp-file rename); edit the host file and restart the container
-- **proxy/TUN apps on the Mac (Happ etc.)** hijack `100.64/10` and DNS — the
-  per-peer `/32` route daemon + hosts entry neutralize both
+- **Run duplicate-free**: two container runtimes (e.g. root + rootless podman)
+  share host networking — a second `excalidraw-room` will steal `:3002` and
+  crash-loop the canonical one. Always use the same podman (this repo: `sudo podman`)
 - Rooms are E2E-encrypted; the short-code map trades a bit of that
   (it stores room keys server-side) for shorter links — delete
   `shortcode-data/codes.json` at any time to revoke
 
-## Repo layout (monorepo)
+## Updating the app
 
-This repo is the whole project: packaging (`install.sh`, `shortcode/`,
-`mac/`, `android/`) plus the app source under `app/` (the former
-`excalidraw-selfhosted-fork`, merged as a git subtree with full history —
-see `git log -- app`). `~/excalidraw` on the Deck IS this repo's checkout
-(branch `master`); runtime files (`shortcode-data/`, `certs/`, `Caddyfile`,
-`shortcode-server.js`) live next to it, gitignored, never committed.
-
-Pulling upstream Excalidraw into `app/` later:
+Commit under `app/` (or packaging), push `master`, then on the host:
 
 ```bash
-git subtree pull --prefix=app https://github.com/excalidraw/excalidraw.git <tag-or-main> --squash
+cd ~/excalidraw && bash redeploy.sh   # git pull + rebuild + swap
 ```
 
-(`--squash` keeps upstream history out of our log; drop it to keep full
-history. The old `excalidraw-selfhosted-fork` remote is frozen/archive.)
+No bundles: the host updates via `git pull` (needs one read credential for
+this private repo), falling back to files synced from another machine.
 
-## Updating the app on the Deck
+## Platform quirks
 
-Commit under `app/` (or packaging), push `master`, then on the Deck:
-
-```bash
-cd ~/excalidraw && bash deck-redeploy-fork.sh   # git pull + rebuild + swap
-```
-
-No bundles: the Deck updates via `git pull` (needs one read credential for
-this private repo), falling back to files synced from the Mac.
+- **SteamOS**: `/var` is a ~230 MB partition, so the installer moves podman's
+  root store to `/home/containers/storage` with the `vfs` driver (overlay fails
+  on that FS); needs `sudo steamos-readonly disable` once. Use
+  `reinstall.sh` (re-runs `install.sh`) after SteamOS updates.
+- **Small `/var` on other distros**: if under ~2 GB free and no
+  `storage.conf` exists yet, the installer moves just the graphroot to
+  `/home/containers/storage`, keeping the default driver.
