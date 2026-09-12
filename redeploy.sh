@@ -16,6 +16,9 @@ fi
 
 echo "== 2/5 image build (yarn layers cached; src-only changes) =="
 (cd app && sudo podman build -t excalidraw-selfhost .)
+# vfs duplicates layers per build (120G pileup once); drop dangling images
+# from older builds so the disk never fills again (tagged/used images kept)
+sudo podman image prune -f >/dev/null 2>&1 || true
 
 echo "== 3/5 shortcode service (codes persisted to ./shortcode-data/codes.json) =="
 cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
