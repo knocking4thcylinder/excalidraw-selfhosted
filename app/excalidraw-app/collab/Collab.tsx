@@ -293,7 +293,40 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   }
 
   onOfflineStatusToggle = () => {
-    appJotaiStore.set(isOfflineAtom, !window.navigator.onLine);
+    const wasOffline = appJotaiStore.get(isOfflineAtom);
+    const online = window.navigator.onLine;
+    appJotaiStore.set(isOfflineAtom, !online);
+    // Coming back online with a room pending (entered offline mode with no
+    // usable socket): retry the join so local work merges and syncs without
+    // any manual reopen. No-op when already healthy.
+    if (online && wasOffline) {
+      this.retryOfflineJoin();
+    }
+  };
+
+  private offlineRejoinInFlight = false;
+
+  private retryOfflineJoin = async () => {
+    if (this.offlineRejoinInFlight) {
+      return;
+    }
+    const pending = appJotaiStore.get(offlineRoomPendingAtom);
+    if (!pending) {
+      return;
+    }
+    if (this.portal.socket?.connected) {
+      return;
+    }
+    this.offlineRejoinInFlight = true;
+    try {
+      if (this.portal.socket) {
+        // Drop the dead husk so the fresh start below isn't early-returned.
+        this.portal.close();
+      }
+      await this.startCollaboration({ ...pending });
+    } finally {
+      this.offlineRejoinInFlight = false;
+    }
   };
 
   componentWillUnmount() {
@@ -578,11 +611,24 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     scenePromise.then(clearPendingScene, clearPendingScene);
 
     this.setIsCollaborating(true);
+    // Pause local persistence BEFORE any await: a room boot must never
+    // persist its (still empty) canvas over local work, and offline work
+    // must survive from the first millisecond.
     LocalData.pauseSave("collaboration");
 
-    const { default: socketIOClient } = await import(
-      /* webpackChunkName: "socketIoClient" */ "socket.io-client"
-    );
+    // The socket client is a lazily-loaded chunk. Offline (or a not-yet
+    // precached chunk) it never resolves — enter offline mode instead of
+    // hanging the boot with local saves paused.
+    let socketIOClient: typeof import("socket.io-client").default;
+    try {
+      ({ default: socketIOClient } = await import(
+        /* webpackChunkName: "socketIoClient" */ "socket.io-client"
+      ));
+    } catch (error: any) {
+      console.error("socket.io chunk failed to load", error);
+      this.enterOfflineRoomMode({ roomId, roomKey });
+      return null;
+    }
 
     const fallbackInitializationHandler = () => {
       this.initializeRoom({
