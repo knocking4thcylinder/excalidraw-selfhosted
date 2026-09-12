@@ -195,6 +195,19 @@ read credential for this private repo; otherwise sync files from the Mac).
   storage to `/home/containers/storage` (survives updates) and `reinstall.sh`
   regenerates containers from the fork clone in `~/excalidraw/fork`.
 
+## Offline-first rooms (DONE)
+
+Workbox shell precached (`app/excalidraw-app/vite.config.mts` + `registerSW`;
+`/s/*` denylisted so short codes stay server-side). Offline boot with a room
+link keeps the canvas, persists locally, shows a pending banner, and merges
+with the snapshot on reconnect (`paintOfflineRecovery` union + direct paint
+past the spent initial promise); empty states never overwrite (`409` +
+client guards + save suppression while recovery pending). Join clears nothing
+that isn't synced — except explicit room switches, which wipe upfront
+(`RoomsPage.openRoom`, hashchange; create keeps canvas as seed). Regression
+tests: `app/excalidraw-app/tests/rooms-offline.test.tsx` (both must pass;
+needs the `isTestEnv` fallback-timer gate in `app_constants.ts`).
+
 ## Where I'd go next (for a successor model)
 
 The obvious stretch goals, all in the fork or the packaging repo, roughly in

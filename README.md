@@ -88,6 +88,16 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
   (it stores room keys server-side) for shorter links — delete
   `shortcode-data/codes.json` at any time to revoke
 
+## Offline use (tablet without network)
+
+The app shell is precached by a service worker, so rooms open with no
+network. Draw freely — work persists on the device. On reconnect the client
+rejoins, merges offline strokes with the server snapshot (union, versioned),
+and saves back; history keeps prior snapshots, and empty states never
+overwrite good ones (409 + client guards). Rooms created offline register
+themselves on first connect. Collab itself needs connectivity; offline means
+solo drawing with later merge (last-writer-wins per element on conflict).
+
 ## Updating the app
 
 Commit under `app/` (or packaging), push `master`, then on the host:
