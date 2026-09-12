@@ -9,7 +9,6 @@ import {
   share,
   shareIOS,
   shareWindows,
-  usersIcon,
 } from "@excalidraw/excalidraw/components/icons";
 import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
 import { useCopyStatus } from "@excalidraw/excalidraw/hooks/useCopiedIndicator";
@@ -19,7 +18,6 @@ import { useEffect, useRef, useState } from "react";
 
 import { atom, useAtom, useAtomValue } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
-import { openRoomsPage } from "../rooms/roomsRoute";
 
 import "./ShareDialog.scss";
 import { QRCode } from "./QRCode";
@@ -202,24 +200,6 @@ const ActiveRoomDialog = ({
         />
         <QRCode value={activeRoomLink} />
       </details>
-
-      <div className="ShareDialog__active__actions">
-        <FilledButton
-          size="large"
-          label={t("myRooms.exitRoom")}
-          icon={usersIcon}
-          onClick={() => {
-            trackEvent("share", "room exited to list");
-            // silent teardown (no confirm): the user explicitly asked to
-            // leave, and the Rooms page is the destination, not bare canvas.
-            // Full stop (with confirm) stays available via the command
-            // palette / hamburger menu.
-            collabAPI.stopCollaboration(false);
-            openRoomsPage(window);
-            handleClose();
-          }}
-        />
-      </div>
     </>
   );
 };
@@ -229,9 +209,9 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
 
   const { collabAPI } = props;
 
-  // Picker does one job: start a session, or hand off to the Rooms page
-  // (join by link/code, browse/rename/delete rooms). Joining, the room list
-  // and the backend export link live there / in Export — not duplicated here.
+  // Picker does one job: start a session. Everything else (join by
+  // link/code, room list, leaving) lives on the Rooms page (hamburger menu,
+  // command palette) — not duplicated here.
   const startCollabJSX = collabAPI ? (
     <>
       <div className="ShareDialog__picker__header">
@@ -250,19 +230,6 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
           onClick={() => {
             trackEvent("share", "room creation", `ui (${getFrame()})`);
             collabAPI.startCollaboration(null);
-          }}
-        />
-      </div>
-
-      <div className="ShareDialog__picker__button">
-        <FilledButton
-          size="large"
-          variant="outlined"
-          label={t("myRooms.title")}
-          icon={usersIcon}
-          onClick={() => {
-            openRoomsPage(window);
-            props.handleClose();
           }}
         />
       </div>
