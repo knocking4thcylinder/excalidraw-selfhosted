@@ -153,6 +153,10 @@ export class LocalData {
   private static locker = new Locker<SavingLockTypes>();
 
   static pauseSave = (lockType: SavingLockTypes) => {
+    // Drop anything scheduled before the pause: a room boot schedules a
+    // save of its still-empty canvas, which would otherwise fire after the
+    // pause engaged and wipe local work (e.g. an offline seed) from storage.
+    this._save.cancel();
     this.locker.lock(lockType);
   };
 
