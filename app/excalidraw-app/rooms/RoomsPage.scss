@@ -105,6 +105,15 @@
       &--active {
         border-color: var(--color-primary);
       }
+
+      &:hover .RoomsPage__rowActions,
+      &:focus-within .RoomsPage__rowActions {
+        opacity: 1;
+      }
+
+      &--busy .RoomsPage__rowActions {
+        opacity: 1;
+      }
     }
 
     &__rowMain {
@@ -175,12 +184,6 @@
       flex-shrink: 0;
       opacity: 0;
       transition: opacity 0.12s ease-in;
-    }
-
-    &__row:hover &__rowActions,
-    &__row:focus-within &__rowActions,
-    &__row--busy &__rowActions {
-      opacity: 1;
     }
 
     @media (hover: none) {
