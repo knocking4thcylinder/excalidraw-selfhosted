@@ -91,12 +91,16 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
 ## Offline use (tablet without network)
 
 The app shell is precached by a service worker, so rooms open with no
-network. Draw freely — work persists on the device. On reconnect the client
-rejoins, merges offline strokes with the server snapshot (union, versioned),
-and saves back; history keeps prior snapshots, and empty states never
-overwrite good ones (409 + client guards). Rooms created offline register
-themselves on first connect. Collab itself needs connectivity; offline means
-solo drawing with later merge (last-writer-wins per element on conflict).
+network. Draw freely — work persists on the device. Offline is silent: no
+banner, no prompts; the client rejoins in the background (poll + socket
+events, not just `navigator.onLine`) and merges offline strokes with the
+server snapshot (union, versioned), then saves back; history keeps prior
+snapshots, and empty states never overwrite good ones (409 + client guards).
+Rooms created offline register themselves on first connect. Every edit also
+lands in a room-scoped device backup, and server snapshots save every ~5s,
+so a crash loses seconds at most. Collab itself needs connectivity; offline
+means solo drawing with later merge (last-writer-wins per element on
+conflict).
 
 ## Updating the app
 

@@ -211,6 +211,8 @@ export const saveRoomToServer = async (
       method: "POST",
       headers: { "content-type": "application/json" },
       cache: "no-store",
+      // let tab-close / app-kill saves survive teardown
+      keepalive: true,
       body: JSON.stringify({
         key: roomKey,
         iv: toBase64(iv),

@@ -87,9 +87,27 @@ const saveDataStateToLocalStorage = (
       _appState.openSidebar = null;
     }
 
+    const nonDeleted = getNonDeletedElements(elements);
+    // Crash-safety guard: never overwrite a non-empty local canvas with an
+    // empty one (room boot wipes / resets fire onChange with []). The empty
+    // state is never real user data — a real clear goes through delete, not
+    // a blank save. Without this, resuming local saves during collaboration
+    // would let a fresh boot wipe the backup we need after a crash.
+    if (nonDeleted.length === 0) {
+      try {
+        const existing = localStorage.getItem(
+          STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS,
+        );
+        if (existing && existing !== "[]" && JSON.parse(existing).length > 0) {
+          return;
+        }
+      } catch {
+        // unparsable stored value — fall through and overwrite it
+      }
+    }
     localStorage.setItem(
       STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS,
-      JSON.stringify(getNonDeletedElements(elements)),
+      JSON.stringify(nonDeleted),
     );
     localStorage.setItem(
       STORAGE_KEYS.LOCAL_STORAGE_APP_STATE,

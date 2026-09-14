@@ -62,6 +62,7 @@ import {
   LOAD_IMAGES_TIMEOUT,
   WS_SUBTYPES,
   SYNC_FULL_SCENE_INTERVAL_MS,
+  ROOM_SNAPSHOT_INTERVAL_MS,
   WS_EVENTS,
 } from "../app_constants";
 import {
@@ -107,12 +108,68 @@ export const collabAPIAtom = atom<CollabAPI | null>(null);
 export const isCollaboratingAtom = atom(false);
 export const isOfflineAtom = atom(false);
 // Set when a room join finds no server (offline boot): the canvas keeps
-// local-only work, local persistence resumes, and the banner offers the
-// pending state. Cleared on the first successful server contact.
+// local-only work and local persistence resumes. Silent — no banner.
+// Cleared on the first successful server contact.
 export const offlineRoomPendingAtom = atom<{
   roomId: string;
   roomKey: string;
 } | null>(null);
+
+// Crash-safety: single-slot per-device backup of the last-touched room,
+// written on every edit (throttled) and restored on boot when the room
+// matches. One slot bounds localStorage use; a crash always reloads the
+// same URL, so the last room is the one that matters.
+const ROOM_BACKUP_KEY = "excalidraw-room-backup";
+
+type RoomBackup = {
+  roomId: string;
+  elements: readonly SyncableExcalidrawElement[];
+  updatedAt: number;
+};
+
+const readRoomBackup = (
+  roomId: string,
+): readonly SyncableExcalidrawElement[] | null => {
+  try {
+    const raw = localStorage.getItem(ROOM_BACKUP_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<RoomBackup>;
+    if (parsed?.roomId !== roomId || !Array.isArray(parsed.elements)) {
+      return null;
+    }
+    return parsed.elements as readonly SyncableExcalidrawElement[];
+  } catch {
+    return null;
+  }
+};
+
+// Union by id, last-writer-wins per element (higher version wins, ties go
+// to the local backup which holds the unsynced crash/offline strokes).
+const mergeBackupWithServer = (
+  backup: readonly SyncableExcalidrawElement[],
+  server: readonly SyncableExcalidrawElement[],
+): SyncableExcalidrawElement[] => {
+  const byId = new Map<
+    string,
+    SyncableExcalidrawElement & { version: number }
+  >();
+  for (const el of server as (SyncableExcalidrawElement & {
+    version: number;
+  })[]) {
+    byId.set(el.id, el);
+  }
+  for (const el of backup as (SyncableExcalidrawElement & {
+    version: number;
+  })[]) {
+    const prev = byId.get(el.id);
+    if (!prev || (el.version ?? 0) >= (prev.version ?? 0)) {
+      byId.set(el.id, el);
+    }
+  }
+  return [...byId.values()];
+};
 
 interface CollabState {
   errorMessage: string | null;
@@ -241,11 +298,26 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   private onUmmount: (() => void) | null = null;
 
+  private offlineRetryTimer?: number;
+
   componentDidMount() {
     window.addEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);
     window.addEventListener("online", this.onOfflineStatusToggle);
     window.addEventListener("offline", this.onOfflineStatusToggle);
     window.addEventListener(EVENT.UNLOAD, this.onUnload);
+    // Silent reconnect: navigator.onLine events are unreliable (WebView,
+    // tailnet drops where the OS still reports "online"), so poll while a
+    // room is pending plus retry when the app becomes visible again.
+    this.offlineRetryTimer = window.setInterval(() => {
+      if (appJotaiStore.get(offlineRoomPendingAtom)) {
+        this.retryOfflineJoin();
+      }
+    }, 4000);
+    document.addEventListener(
+      EVENT.VISIBILITY_CHANGE,
+      this.onVisibilityRetry,
+    );
+    window.addEventListener("focus", this.onVisibilityRetry);
 
     const unsubOnUserFollow = this.excalidrawAPI.onUserFollow((payload) => {
       this.setUserToFollow(
@@ -306,6 +378,84 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   private offlineRejoinInFlight = false;
 
+  private onVisibilityRetry = () => {
+    if (
+      document.visibilityState === "visible" &&
+      appJotaiStore.get(offlineRoomPendingAtom)
+    ) {
+      this.retryOfflineJoin();
+    }
+  };
+
+  private onSocketDisconnect = () => {
+    // Silent: just flag it for logic; there is no banner anymore.
+    appJotaiStore.set(isOfflineAtom, true);
+  };
+
+  private onSocketConnect = () => {
+    appJotaiStore.set(isOfflineAtom, false);
+    // Mid-session drop with no pending room: socket.io auto-reconnected.
+    // Silently push the live canvas at once (solo work since the drop would
+    // otherwise wait for the next throttled autosave). Gated on a completed
+    // initial load so the boot-time connect doesn't push an empty canvas.
+    if (
+      !appJotaiStore.get(offlineRoomPendingAtom) &&
+      this.portal.socketInitialized
+    ) {
+      this.saveCollabRoomToFirebase(
+        getSyncableElements(this.getSceneElementsIncludingDeleted()),
+      );
+    }
+  };
+
+  // Crash-safety backup: every edit lands in localStorage (throttled) so a
+  // tablet crash loses at most ~1s. Failures are silent. Empty canvases are
+  // never written: boot resets fire onChange with [], which must not clobber
+  // the backup holding pre-crash work (a real clear goes through delete and
+  // keeps tombstones server-side; rooms empty for real via delete).
+  private saveRoomBackupThrottled = throttle(
+    (roomId: string, elements: readonly SyncableExcalidrawElement[]) => {
+      if (!elements.length) {
+        return;
+      }
+      try {
+        const backup: RoomBackup = {
+          roomId,
+          elements,
+          updatedAt: Date.now(),
+        };
+        localStorage.setItem(ROOM_BACKUP_KEY, JSON.stringify(backup));
+      } catch (error) {
+        console.error("room backup save failed", error);
+      }
+    },
+    1000,
+  );
+
+  // Cheap reachability probe so the 4s poll doesn't churn dead sockets
+  // (and wipe nothing) while truly offline: only restart the join when the
+  // host actually answers. Fast-fail, silent.
+  private checkServerReachable = async (): Promise<boolean> => {
+    try {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 3000);
+      try {
+        const resp = await fetch("/api/rooms", {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        // Any HTTP answer (even 4xx/5xx) means the host is reachable;
+        // only network failure keeps us offline.
+        return !!resp;
+      } finally {
+        window.clearTimeout(timer);
+      }
+    } catch {
+      return false;
+    }
+  };
+
   private retryOfflineJoin = async () => {
     if (this.offlineRejoinInFlight) {
       return;
@@ -314,11 +464,25 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (!pending) {
       return;
     }
-    if (this.portal.socket?.connected) {
-      return;
-    }
     this.offlineRejoinInFlight = true;
     try {
+      // A dead husk may have auto-reconnected on its own (socket.io
+      // retries in the background): then just load + merge over the live
+      // socket instead of tearing it down.
+      if (this.portal.socket?.connected) {
+        try {
+          await this.initializeRoom({
+            fetchScene: true,
+            roomLinkData: { ...pending },
+          });
+        } catch (error) {
+          console.error("offline retry load failed", error);
+        }
+        return;
+      }
+      if (!(await this.checkServerReachable())) {
+        return;
+      }
       if (this.portal.socket) {
         // Drop the dead husk so the fresh start below isn't early-returned.
         this.portal.close();
@@ -332,6 +496,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   componentWillUnmount() {
     window.removeEventListener("online", this.onOfflineStatusToggle);
     window.removeEventListener("offline", this.onOfflineStatusToggle);
+    if (this.offlineRetryTimer) {
+      window.clearInterval(this.offlineRetryTimer);
+      this.offlineRetryTimer = undefined;
+    }
+    document.removeEventListener(
+      EVENT.VISIBILITY_CHANGE,
+      this.onVisibilityRetry,
+    );
+    window.removeEventListener("focus", this.onVisibilityRetry);
     window.removeEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);
     window.removeEventListener(EVENT.UNLOAD, this.onUnload);
     window.removeEventListener(EVENT.POINTER_MOVE, this.onPointerMove);
@@ -357,6 +530,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private onUnload = () => {
+    // Best-effort crash/kill persistence: flush the throttled local backup
+    // synchronously so the last strokes survive even if the 1s window
+    // hadn't fired yet. Server flush rides in beforeUnload + keepalive.
+    try {
+      (this.saveRoomBackupThrottled as { flush?: () => void }).flush?.();
+    } catch {
+      // ignore — backup is best-effort
+    }
+    LocalData.flushSave();
     this.destroySocketClient({ isUnload: true });
   };
 
@@ -441,6 +623,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   stopCollaboration = (keepRemoteState = true) => {
     // Leaving abandons any pending offline recovery for the old room.
     this.clearOfflinePending();
+    // Persist the old room's last strokes before tearing down, so a quick
+    // room switch doesn't drop them from the crash backup.
+    try {
+      (this.saveRoomBackupThrottled as { flush?: () => void }).flush?.();
+    } catch {
+      // ignore — backup is best-effort
+    }
     this.queueBroadcastAllElements.cancel();
     this.queueSaveToFirebase.cancel();
     this.loadImageFiles.cancel();
@@ -650,6 +839,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       );
 
       this.portal.socket.once("connect_error", fallbackInitializationHandler);
+      // Silent link-state tracking: socket.io auto-reconnects on its own;
+      // these only flip the (now invisible) offline flag and push local
+      // work after a mid-session drop. No banners, no prompts.
+      this.portal.socket.on("disconnect", this.onSocketDisconnect);
+      this.portal.socket.on("connect", this.onSocketConnect);
     } catch (error: any) {
       console.error(error);
       this.setErrorDialog(error.message);
@@ -662,8 +856,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     registerRoom(roomId, roomKey);
 
     if (existingRoomLinkData) {
-      // when joining existing room, don't merge it with current scene data
-      this.excalidrawAPI.resetScene();
+      // Joining a room starts blank — except when this is a background
+      // retry while offline work is pending: resetting would wipe the very
+      // strokes the retry is trying to sync. (Explicit room switches wipe
+      // the canvas themselves before starting, with pending cleared.)
+      if (!this.offlineRecoveryPending) {
+        this.excalidrawAPI.resetScene();
+      }
     } else {
       const elements = this.excalidrawAPI.getSceneElements().map((element) => {
         if (isImageElement(element) && element.status === "saved") {
@@ -681,6 +880,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       });
 
       this.saveCollabRoomToFirebase(getSyncableElements(elements));
+      // A freshly created room owns its canvas seed: local saves resume at
+      // once so the seed itself is crash-safe from the first second.
+      LocalData.resumeSave("collaboration");
     }
 
     // fallback in case you're not alone in the room but still don't receive
@@ -905,21 +1107,50 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       };
 
       const elements = await loadFromServerFirst();
+      // Crash-safety: unsynced strokes from before a crash/offline stretch
+      // live in the room backup. Merge them over the server snapshot so a
+      // reload never drops work the server hasn't seen yet. Room-scoped, so
+      // nothing leaks across rooms.
+      const backup = readRoomBackup(roomLinkData.roomId);
       if (elements) {
+        const merged =
+          backup?.length &&
+          !this.elementsEqualIds(
+            backup,
+            elements as readonly SyncableExcalidrawElement[],
+          )
+            ? mergeBackupWithServer(backup, elements)
+            : (elements as readonly SyncableExcalidrawElement[]);
+        // Set before any paint: updateScene synchronously fires onChange,
+        // and without this the freshly loaded scene would rebroadcast to
+        // the room as if it were a local edit (same reason _reconcileElements
+        // sets the version before updating).
+        this.setLastBroadcastedOrReceivedSceneVersion(getSceneVersion(merged));
         // Offline recovery reads the canvas below, so the wipe must wait:
         // reset only the clean (non-recovery) path. Recovery paints the
-        // merged scene itself via paintOfflineRecovery.
+        // merged scene itself via paintOfflineRecovery. The clean path
+        // paints directly too (not just via the return value) so late
+        // retries after boot — which ignore the return — still reach the
+        // canvas; on boot the initialData application of the same content
+        // is a harmless second paint.
         if (!this.offlineRecoveryPending) {
           this.excalidrawAPI.resetScene();
+          const restored = restoreElements(merged, null, {
+            repairBindings: true,
+          });
+          this.excalidrawAPI.updateScene({
+            elements: restored,
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
         }
-        this.setLastBroadcastedOrReceivedSceneVersion(
-          getSceneVersion(elements),
-        );
-        await this.paintOfflineRecovery(elements);
+        await this.paintOfflineRecovery(merged);
         this.clearOfflinePending();
+        // Online and healthy: local saves resume so every later edit is
+        // crash-safe (the boot pause only guarded the empty-canvas window).
+        LocalData.resumeSave("collaboration");
 
         return {
-          elements,
+          elements: merged,
           scrollToContent: true,
         };
       }
@@ -928,10 +1159,53 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // unreachable: enter offline mode instead of resolving to an empty
       // canvas that would reads as "room is empty". Local work keeps
       // accumulating in the canvas (persisted via resumed local save) and
-      // merges on recovery. A connected socket with no snapshot is just an
-      // empty/new room — resolve null as before.
+      // merges on recovery. A crash backup for the same room paints
+      // immediately so a crash + offline boot still restores.
       if (!this.portal.socket.connected) {
         this.enterOfflineRoomMode(roomLinkData);
+        if (backup?.length) {
+          const restored = restoreElements(backup, null, {
+            repairBindings: true,
+          });
+          this.excalidrawAPI.updateScene({
+            elements: restored,
+            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+          });
+          return {
+            elements: restored,
+            scrollToContent: true,
+          };
+        }
+        return null;
+      }
+      // Connected socket with no snapshot: empty/new room — but a crash
+      // backup for the SAME room still wins over blank (e.g. created offline,
+      // crashed before the first server save).
+      if (backup?.length) {
+        const restored = restoreElements(backup, null, {
+          repairBindings: true,
+        });
+        this.setLastBroadcastedOrReceivedSceneVersion(
+          getSceneVersion(restored),
+        );
+        this.excalidrawAPI.updateScene({
+          elements: restored,
+          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+        });
+        LocalData.resumeSave("collaboration");
+        return {
+          elements: restored,
+          scrollToContent: true,
+        };
+      }
+      // Connected but no snapshot and no backup: a genuinely empty room —
+      // unless an offline recovery is still pending, in which case the canvas
+      // may hold strokes the throttled backup hasn't flushed yet. Never wipe
+      // those: keep them and push to the server instead.
+      LocalData.resumeSave("collaboration");
+      if (this.offlineRecoveryPending) {
+        this.clearOfflinePending();
+        this.queueSaveToFirebase();
         return null;
       }
       this.excalidrawAPI.resetScene();
@@ -943,7 +1217,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   // Offline-first support (tablet without network). Called when a room join
   // finds no reachable server: keep the canvas (it may hold offline work),
-  // persist locally, and flag the pending state for banner + recovery.
+  // persist locally, and flag the pending state for silent background
+  // recovery. No UI: offline is invisible by design.
   private enterOfflineRoomMode(roomLinkData: {
     roomId: string;
     roomKey: string;
@@ -980,6 +1255,27 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
   }
+
+  // Cheap identity check so we skip the backup merge when both sides
+  // already hold the same ids (the common healthy-join case).
+  private elementsEqualIds = (
+    a: readonly { id: string }[],
+    b: readonly { id: string }[],
+  ): boolean => {
+    if (a.length !== b.length) {
+      return false;
+    }
+    const ids = new Set(a.map((el) => el.id));
+    if (ids.size !== a.length) {
+      return false;
+    }
+    for (const el of b) {
+      if (!ids.has(el.id)) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   private _reconcileElements = (
     remoteElements: readonly RemoteExcalidrawElement[],
@@ -1194,6 +1490,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   syncElements = (elements: readonly OrderedExcalidrawElement[]) => {
     this.broadcastElements(elements);
     this.queueSaveToFirebase();
+    // Crash-safety: persist every edit locally, even while collaborating.
+    // The roomId is stable for the session; the backup restores after a
+    // crash even if the server snapshot lags behind.
+    if (this.portal.roomId) {
+      this.saveRoomBackupThrottled(
+        this.portal.roomId,
+        getSyncableElements(elements),
+      );
+    }
   };
 
   queueBroadcastAllElements = throttle(() => {
@@ -1220,7 +1525,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         );
       }
     },
-    SYNC_FULL_SCENE_INTERVAL_MS,
+    ROOM_SNAPSHOT_INTERVAL_MS,
     { leading: false },
   );
 

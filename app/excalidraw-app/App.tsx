@@ -97,8 +97,6 @@ import Collab, {
   activeRoomLinkAtom,
   collabAPIAtom,
   isCollaboratingAtom,
-  isOfflineAtom,
-  offlineRoomPendingAtom,
   userToFollowAtom,
 } from "./collab/Collab";
 import { AppFooter } from "./components/AppFooter";
@@ -878,9 +876,6 @@ const ExcalidrawWrapper = () => {
     );
   };
 
-  const isOffline = useAtomValue(isOfflineAtom);
-  const offlinePendingRoom = useAtomValue(offlineRoomPendingAtom);
-
   const localStorageQuotaExceeded = useAtomValue(localStorageQuotaExceededAtom);
 
   const onCollabDialogOpen = useCallback(
@@ -1139,13 +1134,9 @@ const ExcalidrawWrapper = () => {
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />
-        {((isCollaborating && isOffline) || offlinePendingRoom) && (
-          <div className="alertalert--warning">
-            {offlinePendingRoom
-              ? t("alerts.collabOfflinePendingSync")
-              : t("alerts.collabOfflineWarning")}
-          </div>
-        )}
+        {/* Offline is silent by design: no banner (a previous unstyled
+            banner blocked touches and ate tablet screen space). The client
+            keeps drawing locally and rejoins/merges in the background. */}
         {localStorageQuotaExceeded && (
           <div className="alert alert--danger">
             {t("alerts.localStorageQuotaExceeded")}

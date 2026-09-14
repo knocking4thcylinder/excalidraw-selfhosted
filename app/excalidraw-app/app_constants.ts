@@ -8,6 +8,9 @@ export const INITIAL_SCENE_UPDATE_TIMEOUT = isTestEnv() ? 50 : 5000;
 export const FILE_UPLOAD_TIMEOUT = 300;
 export const LOAD_IMAGES_TIMEOUT = 500;
 export const SYNC_FULL_SCENE_INTERVAL_MS = 20000;
+// Crash-safety: encrypted server snapshots save far more often than the full
+// socket resync above, so a solo tablet crash loses seconds, not up to 20s.
+export const ROOM_SNAPSHOT_INTERVAL_MS = 5000;
 export const SYNC_BROWSER_TABS_TIMEOUT = 50;
 export const CURSOR_SYNC_TIMEOUT = 33; // ~30fps
 export const DELETED_ELEMENT_TIMEOUT = 24 * 60 * 60 * 1000; // 1 day

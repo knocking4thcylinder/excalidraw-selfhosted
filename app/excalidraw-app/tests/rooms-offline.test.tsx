@@ -111,8 +111,8 @@ describe("offline-first rooms", () => {
 
     await render(<ExcalidrawApp />);
 
-    // fallback timer is short under tests: offline entry flags pending and
-    // shows the pending banner.
+    // fallback timer is short under tests: offline entry flags pending.
+    // Offline is silent by design — no banner in the DOM.
     await waitFor(
       () => {
         expect(appJotaiStore.get(offlineRoomPendingAtom)).toEqual({
@@ -123,7 +123,8 @@ describe("offline-first rooms", () => {
       { timeout: 25000 },
     );
 
-    expect(document.body.innerHTML).toMatch(/sync when|синхронизируются/);
+    expect(document.body.innerHTML).not.toMatch(/sync when|синхронизируются/);
+    expect(document.body.innerHTML).not.toMatch(/No internet connection/);
 
     // Draw offline: direct scene update (as the canvas would from strokes),
     // then confirm it reached local persistence.

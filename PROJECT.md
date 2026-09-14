@@ -199,11 +199,19 @@ read credential for this private repo; otherwise sync files from the Mac).
 
 Workbox shell precached (`app/excalidraw-app/vite.config.mts` + `registerSW`;
 `/s/*` denylisted so short codes stay server-side). Offline boot with a room
-link keeps the canvas, persists locally, shows a pending banner, and merges
-with the snapshot on reconnect (`paintOfflineRecovery` union + direct paint
-past the spent initial promise); empty states never overwrite (`409` +
-client guards + save suppression while recovery pending). Join clears nothing
-that isn't synced — except explicit room switches, which wipe upfront
+link keeps the canvas and persists locally — silently, no banner (a previous
+unstyled banner blocked touches and ate tablet screen space). Reconnect is
+silent too (4s poll + socket connect/disconnect + visibility/focus, with a
+cheap `/api/rooms` reachability probe gating socket restarts; retries never
+wipe pending offline strokes). Merges with the snapshot on reconnect
+(`paintOfflineRecovery` union + direct paint past the spent initial promise);
+empty states never overwrite (`409` + client guards + save suppression while
+recovery pending). Crash-safety: every edit writes a room-scoped device
+backup (throttled ~1s, flushed on unload/stop, room-matched on boot so
+nothing leaks across rooms), generic local saves resume after a healthy join
+(with a never-overwrite-nonempty-with-empty guard), and server snapshots save
+every ~5s (`ROOM_SNAPSHOT_INTERVAL_MS`, `keepalive` on unload). Join clears
+nothing that isn't synced — except explicit room switches, which wipe upfront
 (`RoomsPage.openRoom`, hashchange; create keeps canvas as seed). Regression
 tests: `app/excalidraw-app/tests/rooms-offline.test.tsx` (both must pass;
 needs the `isTestEnv` fallback-timer gate in `app_constants.ts`).
