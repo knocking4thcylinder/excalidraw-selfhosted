@@ -9,3 +9,4 @@ Caddyfile
 certs/
 reinstall.sh
 fork/
+.deploy.lock

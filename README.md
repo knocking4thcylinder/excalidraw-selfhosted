@@ -107,11 +107,50 @@ conflict).
 Commit under `app/` (or packaging), push `master`, then on the host:
 
 ```bash
-cd ~/excalidraw && bash redeploy.sh   # git pull + rebuild + swap
+cd ~/excalidraw && ./deploy.sh   # git pull + rebuild + swap + verified HTTPS checks
 ```
 
 No bundles: the host updates via `git pull` (needs one read credential for
 this private repo), falling back to files synced from another machine.
+
+## Server recovery and diagnostics
+
+The whole stack is managed by a boot-enabled systemd service:
+
+```bash
+sudo systemctl status excalidraw-stack
+sudo systemctl restart excalidraw-stack  # restart all four containers
+sudo systemctl stop excalidraw-stack     # stop all four containers
+sudo systemctl start excalidraw-stack
+sudo systemctl start --no-block excalidraw-deploy  # build and deploy in the background
+sudo systemctl status excalidraw-deploy           # deployment result and recent logs
+```
+
+The stack service is a coordinator (`active (exited)` is normal); each component
+has its own continuously supervised service. Deployment is on-demand only,
+not run on every boot.
+
+```bash
+./deploy.sh start   # restore boot services and start existing containers; no rebuild
+./deploy.sh status  # container/service state and verified HTTPS app, room, API checks
+./deploy.sh logs    # recent logs for all four services
+./deploy.sh build   # build only the app image
+```
+
+Use `https://<your-host-magicdns>:8443` on the tablet with Tailscale connected.
+Port 443 may serve another application. If the app works locally but the tablet
+cannot connect, check the HTTPS proxy with `status`; `start` repairs missing
+systemd units, including Caddy, so the stack starts after reboot. It also renews
+the TLS certificate when it has less than seven days remaining and installs
+a daily certificate-renewal timer.
+
+Legacy `deck-redeploy-fork.sh`, `redeploy-fork.sh`, and `run-https.sh` commands
+forward to the same helper instead of maintaining separate container settings.
+Deployment preserves `shortcode-data/` and prevents concurrent deployments.
+
+A synced directory without `.git` does **not** download GitHub updates: deploying
+builds its local files and prints a warning. Use a real checkout of
+`knocking4thcylinder/excalidraw-selfhosted` for automatic `git pull` updates.
 
 ## Platform quirks
 

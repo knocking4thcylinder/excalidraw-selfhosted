@@ -8,6 +8,7 @@
 # FQDN defaults to this host's Tailscale MagicDNS name; override with
 # FQDN=host.tailnet.ts.net when python3 is unavailable for detection.
 set -euo pipefail
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
 if [ -z "${FQDN:-}" ]; then
   FQDN=$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)
@@ -53,30 +54,16 @@ STO
   fi
 fi
 
-BASE="$HOME/excalidraw"
+BASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 mkdir -p "$BASE/certs" "$BASE/shortcode-data"
 cd "$BASE"
 
-# 0d. shortcode service source (same directory as this script: shortcode/server.js;
-#     or as a file: shortcode-server.js)
-if [ ! -f "$BASE/shortcode-server.js" ]; then
-  HERE="$(cd "$(dirname "$0")" && pwd)"
-  if [ -f "$HERE/shortcode/server.js" ]; then
-    cp "$HERE/shortcode/server.js" "$BASE/shortcode-server.js"
-  elif [ -f "$HERE/shortcode-server.js" ]; then
-    cp "$HERE/shortcode-server.js" "$BASE/shortcode-server.js"
-  fi
-fi
-SHORTCODE_OK=0
-if [ -f "$BASE/shortcode-server.js" ]; then
-  SHORTCODE_OK=1
-else
-  echo "WARN: shortcode/server.js not found next to install.sh — shortcode service will be skipped"
-fi
+[ -f "$BASE/shortcode/server.js" ] || { echo 'Missing shortcode/server.js; use the complete repository.' >&2; exit 1; }
+cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
 
 # 0c. writable rootfs is required for /etc/systemd/system units and
 #     /etc/containers/storage.conf
-if [ ! -w /etc/systemd/system ]; then
+if [ "$(findmnt -n -o OPTIONS -T /etc/systemd/system | cut -d, -f1)" = ro ]; then
   if [ "$IS_STEAMOS" = 1 ]; then
     echo "run: sudo steamos-readonly disable   (once, before this script)"
   else
@@ -125,6 +112,7 @@ EOF
 sed -i "s|@@FQDN@@|$FQDN|g" Caddyfile
 
 # 3. containers
+sudo systemctl stop excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service 2>/dev/null || true
 sudo podman rm -f excalidraw excalidraw-room excalidraw-caddy 2>/dev/null || true
 
 sudo podman run -d --name excalidraw-room --restart always --network host \
@@ -147,45 +135,14 @@ sudo podman run -d --name excalidraw-caddy --restart always --network host \
   -v "$BASE/certs:/certs:ro" \
   docker.io/library/caddy:2-alpine
 
-# shortcode container only when its source was staged; failure here aborts loudly (set -e)
-if [ "$SHORTCODE_OK" = "1" ]; then
-  sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
-  sudo podman run -d --name excalidraw-shortcode --restart always --network host \
-    -e PORT=3003 \
-    -v "$BASE/shortcode-data:/data" \
-    -v "$BASE/shortcode-server.js:/srv/server.js:ro" \
-    docker.io/library/node:20-alpine node /srv/server.js
-else
-  echo "  shortcode skipped (server.js missing)"
-fi
+sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
+sudo podman run -d --name excalidraw-shortcode --restart always --network host \
+  -e PORT=3003 \
+  -v "$BASE/shortcode-data:/data" \
+  -v "$BASE/shortcode-server.js:/srv/server.js:ro" \
+  docker.io/library/node:20-alpine node /srv/server.js
 
-# 4. systemd system units (root podman) — shortcode unit only when its container was created
-SVCS="excalidraw-room excalidraw excalidraw-caddy"
-if [ "$SHORTCODE_OK" = "1" ]; then
-  SVCS="$SVCS excalidraw-shortcode"
-fi
-for SVC in $SVCS; do
-  printf '%s\n' \
-"[Unit]" \
-"Description=Excalidraw $SVC" \
-"Wants=network-online.target" \
-"After=network-online.target" \
-"" \
-"[Service]" \
-"ExecStart=/usr/bin/podman start -a $SVC" \
-"ExecStop=/usr/bin/podman stop $SVC" \
-"Restart=always" \
-"" \
-"[Install]" \
-"WantedBy=multi-user.target" | sudo tee "/etc/systemd/system/$SVC.service" >/dev/null
-done
-# ensure caddy starts after app (nice, not strictly needed)
-sudo sed -i 's/^After=network-online.target$/After=network-online.target excalidraw.service/' /etc/systemd/system/excalidraw-caddy.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now excalidraw-room.service excalidraw.service excalidraw-caddy.service
-if [ "$SHORTCODE_OK" = "1" ]; then
-  sudo systemctl enable --now excalidraw-shortcode.service
-fi
+bash "$BASE/deploy.sh" start
 
 # 5. reinstall.sh for post-OS-update recovery — just re-run this installer (idempotent)
 cat > "$BASE/reinstall.sh" <<'REEOF'
@@ -195,11 +152,4 @@ set -euo pipefail
 REEOF
 chmod +x "$BASE/reinstall.sh"
 
-# 6. verify
-sleep 6
-echo "== verification =="
-sudo podman ps --format "{{.Names}}  {{.Status}}"
-curl -sk -o /dev/null -w "https app: %{http_code}\n" https://localhost:8443/ --resolve "$FQDN:8443:127.0.0.1"
-curl -sk -o /dev/null -w "https room: %{http_code}\n" --resolve "$FQDN:8443:127.0.0.1" "https://localhost:8443/socket.io/?EIO=4&transport=polling"
-sudo journalctl -u excalidraw --no-pager -n 2 | tail -2
-echo "== DONE. URL: https://$FQDN:8443 =="
+bash "$BASE/deploy.sh" check

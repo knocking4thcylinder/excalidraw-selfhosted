@@ -4,15 +4,18 @@ set -euo pipefail
 # tailscale lives in ~/.local/bin (login-shell PATH only); non-interactive
 # ssh has a minimal PATH, so add it explicitly.
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
-BASE=~/excalidraw
+BASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$BASE"
+exec 9>"$BASE/.deploy.lock"
+flock -n 9 || { echo 'Another deployment is running.' >&2; exit 1; }
 
 echo "== 1/5 update checkout (monorepo; app source is ./app) =="
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git pull --ff-only
 else
-  echo "not a git checkout — expecting files synced from Mac; continuing with working tree as-is"
+  echo "WARNING: not a git checkout — GitHub updates will NOT be downloaded; building local files."
 fi
+bash "$BASE/deploy.sh" start
 
 echo "== 2/5 image build (yarn layers cached; src-only changes) =="
 (cd app && sudo podman build -t excalidraw-selfhost .)
@@ -21,6 +24,8 @@ echo "== 2/5 image build (yarn layers cached; src-only changes) =="
 sudo podman image prune -f >/dev/null 2>&1 || true
 
 echo "== 3/5 shortcode service (codes persisted to ./shortcode-data/codes.json) =="
+trap 'echo "Deployment failed; attempting to restart existing services." >&2; sudo systemctl start excalidraw.service excalidraw-shortcode.service excalidraw-caddy.service || true' ERR
+sudo systemctl stop excalidraw-shortcode.service
 cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
 sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
 mkdir -p "$BASE/shortcode-data"
@@ -59,9 +64,10 @@ $FQDN:8443 {
 }
 CDATA
 sudo podman restart excalidraw-shortcode 2>/dev/null || true
-sudo podman restart excalidraw-caddy
+sudo podman container exists excalidraw-caddy || { echo 'Missing HTTPS container; run ./install.sh first.' >&2; exit 1; }
 
 echo "== 5/5 app container swap =="
+sudo systemctl stop excalidraw.service
 sudo podman rm -f excalidraw 2>/dev/null || true
 sudo podman run -d --name excalidraw --restart always --network host \
   -e FQDN_HOST="$FQDN" \
@@ -74,27 +80,5 @@ sudo podman run -d --name excalidraw --restart always --network host \
     R=$(grep -rlo "oss-collab" /usr/share/nginx/html/assets | wc -l) && \
     [ "$R" = "0" ] && echo "PATCH_OK_WSS" && \
     nginx -g "daemon off;"'
-sudo systemctl restart excalidraw.service 2>/dev/null || true
-
-echo "== shortcode systemd unit =="
-printf "%s\n" \
-  "[Unit]" \
-  "Description=Excalidraw short-code service" \
-  "Wants=network-online.target" \
-  "After=network-online.target" \
-  "" \
-  "[Service]" \
-  "ExecStart=/usr/bin/podman start -a excalidraw-shortcode" \
-  "ExecStop=/usr/bin/podman stop excalidraw-shortcode" \
-  "Restart=always" \
-  "" \
-  "[Install]" \
-  "WantedBy=multi-user.target" | sudo tee /etc/systemd/system/excalidraw-shortcode.service >/dev/null
-sudo systemctl daemon-reload
-sudo systemctl enable --now excalidraw-shortcode.service
-
-echo "== checks =="
-sleep 5
-curl -s -o /dev/null -w "app: %{http_code}\n" http://localhost:3000/
-curl -s -o /dev/null -w "shortcode svc: %{http_code}\n" http://localhost:3003/
-sudo podman ps --format "{{.Names}}  {{.Status}}"
+sudo systemctl restart excalidraw-caddy.service
+bash "$BASE/deploy.sh" start
