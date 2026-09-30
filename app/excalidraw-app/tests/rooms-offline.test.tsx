@@ -1,5 +1,10 @@
 import { API } from "@excalidraw/excalidraw/tests/helpers/api";
-import { act, render, waitFor } from "@excalidraw/excalidraw/tests/test-utils";
+import {
+  act,
+  render,
+  screen,
+  waitFor,
+} from "@excalidraw/excalidraw/tests/test-utils";
 import { vi } from "vitest";
 
 import ExcalidrawApp from "../App";
@@ -13,6 +18,8 @@ Object.defineProperty(window, "crypto", {
     getRandomValues: (arr: number[]) =>
       arr.forEach((v, i) => (arr[i] = Math.floor(Math.random() * 256))),
     subtle: {
+      importKey: async () => ({}),
+      encrypt: async () => new ArrayBuffer(0),
       generateKey: () => {},
       exportKey: () => ({ k: "sTdLvMC_M3V8_vGa3UVRDg" }),
     },
@@ -70,6 +77,8 @@ vi.mock("../data/rooms", async (importOriginal) => {
   const actual: any = await importOriginal();
   return {
     ...actual,
+    registerRoom: async () => {},
+    saveRoomToServer: async () => {},
     loadRoomFromServer: (...args: any[]) => loadHolder.impl(...args),
   };
 });
@@ -112,7 +121,6 @@ describe("offline-first rooms", () => {
     await render(<ExcalidrawApp />);
 
     // fallback timer is short under tests: offline entry flags pending.
-    // Offline is silent by design — no banner in the DOM.
     await waitFor(
       () => {
         expect(appJotaiStore.get(offlineRoomPendingAtom)).toEqual({
@@ -125,6 +133,9 @@ describe("offline-first rooms", () => {
 
     expect(document.body.innerHTML).not.toMatch(/sync when|синхронизируются/);
     expect(document.body.innerHTML).not.toMatch(/No internet connection/);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Offline — waiting to sync changes",
+    );
 
     // Draw offline: direct scene update (as the canvas would from strokes),
     // then confirm it reached local persistence.
@@ -166,6 +177,11 @@ describe("offline-first rooms", () => {
     expect(ids).toContain("offline-seed-rect");
     expect(ids).toContain("server-blue-rect");
     expect(appJotaiStore.get(offlineRoomPendingAtom)).toBeNull();
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Offline — waiting to sync changes"),
+      ).not.toBeInTheDocument(),
+    );
 
     localStorage.clear();
   }, 120000);

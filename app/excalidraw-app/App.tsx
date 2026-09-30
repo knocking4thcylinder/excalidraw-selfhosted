@@ -148,7 +148,6 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 
 import "./index.scss";
 
-import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
 
 import type { CollabAPI } from "./collab/Collab";
@@ -232,7 +231,7 @@ const initializeScene = async (opts: {
   );
   const externalUrlMatch = window.location.hash.match(/^#url=(.*)$/);
 
-  const localDataState = importFromLocalStorage();
+  const localDataState = await importFromLocalStorage();
 
   let scene: Omit<
     RestoredDataState,
@@ -642,7 +641,7 @@ const ExcalidrawWrapper = () => {
       }
     };
 
-    const syncData = debounce(() => {
+    const syncData = debounce(async () => {
       if (isTestEnv()) {
         return;
       }
@@ -652,7 +651,13 @@ const ExcalidrawWrapper = () => {
       ) {
         // don't sync if local state is newer or identical to browser state
         if (isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)) {
-          const localDataState = importFromLocalStorage();
+          const localDataState = await importFromLocalStorage();
+          if (
+            collabAPI?.isCollaborating() ||
+            !isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)
+          ) {
+            return;
+          }
           const username = importUsernameFromLocalStorage();
           setLangCode(getPreferredLanguage());
           excalidrawAPI.updateScene({
@@ -1058,21 +1063,13 @@ const ExcalidrawWrapper = () => {
         autoFocus={true}
         theme={editorTheme}
         onThemeChange={setAppTheme}
-        renderTopRightUI={(isMobile) => {
+        renderTopRightUI={() => {
           if (!collabAPI || isCollabDisabled) {
             return null;
           }
 
           return (
             <div className="excalidraw-ui-top-right">
-              {!isMobile &&
-                excalidrawAPI?.getEditorInterface().formFactor ===
-                  "desktop" && (
-                  <ExcalidrawPlusPromoBanner
-                    isSignedIn={isExcalidrawPlusSignedUser}
-                  />
-                )}
-
               {collabError.message && <CollabError collabError={collabError} />}
               <LiveCollaborationTrigger
                 isCollaborating={isCollaborating}
@@ -1108,6 +1105,7 @@ const ExcalidrawWrapper = () => {
         />
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}
+          onRoomsOpen={onRoomsOpen}
           isCollabEnabled={!isCollabDisabled}
         />
         <OverwriteConfirmDialog>
@@ -1130,7 +1128,10 @@ const ExcalidrawWrapper = () => {
             </OverwriteConfirmDialog.Action>
           )}
         </OverwriteConfirmDialog>
-        <AppFooter onChange={() => excalidrawAPI?.refresh()} />
+        <AppFooter
+          onChange={() => excalidrawAPI?.refresh()}
+          onRoomsOpen={isCollabDisabled ? undefined : onRoomsOpen}
+        />
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />
@@ -1155,6 +1156,7 @@ const ExcalidrawWrapper = () => {
 
         <ShareDialog
           collabAPI={collabAPI}
+          excalidrawAPI={excalidrawAPI}
           onExportToBackend={async () => {
             if (excalidrawAPI) {
               try {

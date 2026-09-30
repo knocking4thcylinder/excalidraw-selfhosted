@@ -54,6 +54,7 @@ import type {
 import type { Mutable, ValueOf } from "@excalidraw/common/utility-types";
 
 import { appJotaiStore, atom } from "../app-jotai";
+import { readRoomBackup, saveRoomBackup } from "../data/sceneStorage";
 import {
   CURSOR_SYNC_TIMEOUT,
   FILE_UPLOAD_MAX_BYTES,
@@ -119,32 +120,6 @@ export const offlineRoomPendingAtom = atom<{
 // written on every edit (throttled) and restored on boot when the room
 // matches. One slot bounds localStorage use; a crash always reloads the
 // same URL, so the last room is the one that matters.
-const ROOM_BACKUP_KEY = "excalidraw-room-backup";
-
-type RoomBackup = {
-  roomId: string;
-  elements: readonly SyncableExcalidrawElement[];
-  updatedAt: number;
-};
-
-const readRoomBackup = (
-  roomId: string,
-): readonly SyncableExcalidrawElement[] | null => {
-  try {
-    const raw = localStorage.getItem(ROOM_BACKUP_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as Partial<RoomBackup>;
-    if (parsed?.roomId !== roomId || !Array.isArray(parsed.elements)) {
-      return null;
-    }
-    return parsed.elements as readonly SyncableExcalidrawElement[];
-  } catch {
-    return null;
-  }
-};
-
 // Union by id, last-writer-wins per element (higher version wins, ties go
 // to the local backup which holds the unsynced crash/offline strokes).
 const mergeBackupWithServer = (
@@ -313,10 +288,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         this.retryOfflineJoin();
       }
     }, 4000);
-    document.addEventListener(
-      EVENT.VISIBILITY_CHANGE,
-      this.onVisibilityRetry,
-    );
+    document.addEventListener(EVENT.VISIBILITY_CHANGE, this.onVisibilityRetry);
     window.addEventListener("focus", this.onVisibilityRetry);
 
     const unsubOnUserFollow = this.excalidrawAPI.onUserFollow((payload) => {
@@ -408,23 +380,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   };
 
-  // Crash-safety backup: every edit lands in localStorage (throttled) so a
-  // tablet crash loses at most ~1s. Failures are silent. Empty canvases are
-  // never written: boot resets fire onChange with [], which must not clobber
-  // the backup holding pre-crash work (a real clear goes through delete and
-  // keeps tombstones server-side; rooms empty for real via delete).
   private saveRoomBackupThrottled = throttle(
-    (roomId: string, elements: readonly SyncableExcalidrawElement[]) => {
+    async (roomId: string, elements: readonly SyncableExcalidrawElement[]) => {
       if (!elements.length) {
         return;
       }
       try {
-        const backup: RoomBackup = {
-          roomId,
-          elements,
-          updatedAt: Date.now(),
-        };
-        localStorage.setItem(ROOM_BACKUP_KEY, JSON.stringify(backup));
+        await saveRoomBackup(localStorage, roomId, elements);
       } catch (error) {
         console.error("room backup save failed", error);
       }
@@ -1111,7 +1073,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // live in the room backup. Merge them over the server snapshot so a
       // reload never drops work the server hasn't seen yet. Room-scoped, so
       // nothing leaks across rooms.
-      const backup = readRoomBackup(roomLinkData.roomId);
+      const backup = await readRoomBackup(localStorage, roomLinkData.roomId);
       if (elements) {
         const merged =
           backup?.length &&

@@ -16,6 +16,8 @@ import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { KEYS, getFrame } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
 
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+
 import { atom, useAtom, useAtomValue } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
 
@@ -47,6 +49,7 @@ const getShareIcon = () => {
 
 export type ShareDialogProps = {
   collabAPI: CollabAPI | null;
+  excalidrawAPI: ExcalidrawImperativeAPI | null;
   handleClose: () => void;
   onExportToBackend: OnExportToBackend;
   type: ShareDialogType;
@@ -72,6 +75,7 @@ const ActiveRoomDialog = ({
 
   useEffect(() => {
     let alive = true;
+    setRoomCode(null);
     fetch("/api/code", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -100,8 +104,10 @@ const ActiveRoomDialog = ({
   const copyRoomLink = async () => {
     try {
       await copyTextToSystemClipboard(activeRoomLink);
+      onCopy();
     } catch (e) {
       collabAPI.setCollabError(t("errors.copyToSystemClipboardFailed"));
+      return;
     }
 
     setJustCopied(true);
@@ -158,10 +164,7 @@ const ActiveRoomDialog = ({
           label={t("buttons.copyLink")}
           icon={copyIcon}
           status={copyStatus}
-          onClick={() => {
-            copyRoomLink();
-            onCopy();
-          }}
+          onClick={copyRoomLink}
         />
       </div>
 
@@ -206,6 +209,9 @@ const ActiveRoomDialog = ({
 
 const ShareDialogPicker = (props: ShareDialogProps) => {
   const { t } = useI18n();
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const startingRef = useRef(false);
 
   const { collabAPI } = props;
 
@@ -225,14 +231,33 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
       <div className="ShareDialog__picker__button">
         <FilledButton
           size="large"
-          label={t("roomDialog.button_startSession")}
+          label={t("roomDialog.shareDrawing")}
           icon={playerPlayIcon}
-          onClick={() => {
+          disabled={starting}
+          status={starting ? "loading" : null}
+          onClick={async () => {
+            if (startingRef.current) {
+              return;
+            }
+            startingRef.current = true;
+            setStarting(true);
+            setError(null);
             trackEvent("share", "room creation", `ui (${getFrame()})`);
-            collabAPI.startCollaboration(null);
+            try {
+              await collabAPI.startCollaboration(null);
+              if (!collabAPI.isCollaborating()) {
+                setError(t("myRooms.createError"));
+              }
+            } catch {
+              setError(t("myRooms.createError"));
+            } finally {
+              startingRef.current = false;
+              setStarting(false);
+            }
           }}
         />
       </div>
+      {error && <div role="alert">{error}</div>}
     </>
   ) : null;
 
@@ -261,6 +286,7 @@ const ShareDialogInner = (props: ShareDialogProps) => {
 
 export const ShareDialog = (props: {
   collabAPI: CollabAPI | null;
+  excalidrawAPI: ExcalidrawImperativeAPI | null;
   onExportToBackend: OnExportToBackend;
 }) => {
   const [shareDialogState, setShareDialogState] = useAtom(shareDialogStateAtom);
@@ -281,6 +307,7 @@ export const ShareDialog = (props: {
     <ShareDialogInner
       handleClose={() => setShareDialogState({ isOpen: false })}
       collabAPI={props.collabAPI}
+      excalidrawAPI={props.excalidrawAPI}
       onExportToBackend={props.onExportToBackend}
       type={shareDialogState.type}
     />

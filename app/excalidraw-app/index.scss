@@ -1,6 +1,11 @@
 @import "../packages/excalidraw/css/variables.module.scss";
 
 .excalidraw {
+  .room-connection-status {
+    font-size: 0.8rem;
+    max-width: 20rem;
+    color: var(--text-primary-color);
+  }
   --color-primary-contrast-offset: #625ee0; // to offset Chubb illusion
 
   &.theme--dark {

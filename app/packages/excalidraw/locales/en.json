@@ -417,6 +417,7 @@
     "moreOptions": "More options"
   },
   "roomDialog": {
+    "shareDrawing": "Share this drawing",
     "desc_intro": "Invite people to collaborate on your drawing.",
     "desc_privacy": "Don't worry, the session is end-to-end encrypted, and fully private. Not even our server can see what you draw.",
     "button_startSession": "Start session",
@@ -441,7 +442,14 @@
     "title": "My rooms",
     "empty": "No rooms yet — start a session and it will appear here.",
     "lastActive": "Last active:",
-    "hasScene": "saved",
+    "hasScene": "stored snapshot",
+    "newEmptyRoom": "New empty room",
+    "confirmEmptyRoom": "Create an empty room? This replaces the drawing on screen. Export any local-only work first, or cancel and use Live collaboration to share this drawing instead.",
+    "search": "Search rooms",
+    "noMatches": "No rooms match your search.",
+    "loading": "Loading rooms…",
+    "retry": "Retry",
+    "offline": "Offline — waiting to sync changes",
     "loadingError": "Couldn't load your rooms. Check your connection.",
     "registerError": "Couldn't register the room on the server.",
     "rename": "Rename",

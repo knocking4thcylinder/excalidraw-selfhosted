@@ -1,4 +1,4 @@
-import { loginIcon } from "@excalidraw/excalidraw/components/icons";
+import { usersIcon } from "@excalidraw/excalidraw/components/icons";
 import { POINTER_EVENTS } from "@excalidraw/common";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { WelcomeScreen } from "@excalidraw/excalidraw/index";
@@ -8,6 +8,7 @@ import { isExcalidrawPlusSignedUser } from "../app_constants";
 
 export const AppWelcomeScreen: React.FC<{
   onCollabDialogOpen: () => any;
+  onRoomsOpen: () => void;
   isCollabEnabled: boolean;
 }> = React.memo((props) => {
   const { t } = useI18n();
@@ -64,16 +65,13 @@ export const AppWelcomeScreen: React.FC<{
               onSelect={() => props.onCollabDialogOpen()}
             />
           )}
-          {!isExcalidrawPlusSignedUser && (
-            <WelcomeScreen.Center.MenuItemLink
-              href={`${
-                import.meta.env.VITE_APP_PLUS_LP
-              }/plus?utm_source=excalidraw&utm_medium=app&utm_content=welcomeScreenGuest`}
-              shortcut={null}
-              icon={loginIcon}
+          {props.isCollabEnabled && (
+            <WelcomeScreen.Center.MenuItem
+              onSelect={props.onRoomsOpen}
+              icon={usersIcon}
             >
-              {t("labels.signUp")}
-            </WelcomeScreen.Center.MenuItemLink>
+              {t("myRooms.title")}
+            </WelcomeScreen.Center.MenuItem>
           )}
         </WelcomeScreen.Center.Menu>
       </WelcomeScreen.Center>

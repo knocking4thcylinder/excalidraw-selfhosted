@@ -45,6 +45,11 @@ import { FileManager } from "./FileManager";
 import { FileStatusStore } from "./fileStatusStore";
 import { Locker } from "./Locker";
 import { updateBrowserStateVersion } from "./tabSync";
+import {
+  isStorageQuotaError,
+  loadLocalScene,
+  saveLocalScene,
+} from "./sceneStorage";
 
 const filesStore = createStore("files-db", "files-store");
 
@@ -70,7 +75,7 @@ class LocalFileManager extends FileManager {
   };
 }
 
-const saveDataStateToLocalStorage = (
+const saveDataStateToLocalStorage = async (
   elements: readonly ExcalidrawElement[],
   appState: AppState,
 ) => {
@@ -95,9 +100,7 @@ const saveDataStateToLocalStorage = (
     // would let a fresh boot wipe the backup we need after a crash.
     if (nonDeleted.length === 0) {
       try {
-        const existing = localStorage.getItem(
-          STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS,
-        );
+        const existing = (await loadLocalScene(localStorage)).elements;
         if (existing && existing !== "[]" && JSON.parse(existing).length > 0) {
           return;
         }
@@ -105,14 +108,10 @@ const saveDataStateToLocalStorage = (
         // unparsable stored value — fall through and overwrite it
       }
     }
-    localStorage.setItem(
-      STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS,
-      JSON.stringify(nonDeleted),
-    );
-    localStorage.setItem(
-      STORAGE_KEYS.LOCAL_STORAGE_APP_STATE,
-      JSON.stringify(_appState),
-    );
+    await saveLocalScene(localStorage, {
+      elements: JSON.stringify(nonDeleted),
+      appState: JSON.stringify(_appState),
+    });
     updateBrowserStateVersion(STORAGE_KEYS.VERSION_DATA_STATE);
     if (localStorageQuotaExceeded) {
       appJotaiStore.set(localStorageQuotaExceededAtom, false);
@@ -120,14 +119,10 @@ const saveDataStateToLocalStorage = (
   } catch (error: any) {
     // Unable to access window.localStorage
     console.error(error);
-    if (isQuotaExceededError(error) && !localStorageQuotaExceeded) {
+    if (isStorageQuotaError(error) && !localStorageQuotaExceeded) {
       appJotaiStore.set(localStorageQuotaExceededAtom, true);
     }
   }
-};
-
-const isQuotaExceededError = (error: any) => {
-  return error instanceof DOMException && error.name === "QuotaExceededError";
 };
 
 type SavingLockTypes = "collaboration";
@@ -140,7 +135,7 @@ export class LocalData {
       files: BinaryFiles,
       onFilesSaved: () => void,
     ) => {
-      saveDataStateToLocalStorage(elements, appState);
+      await saveDataStateToLocalStorage(elements, appState);
 
       await this.fileStorage.saveFiles({
         elements,

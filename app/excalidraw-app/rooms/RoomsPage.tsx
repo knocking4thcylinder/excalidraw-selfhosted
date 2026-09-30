@@ -18,7 +18,7 @@ import {
   restoreElements,
 } from "@excalidraw/excalidraw/data/restore";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
-import { APP_NAME, KEYS } from "@excalidraw/common";
+import { APP_NAME, KEYS, queryFocusableElements } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
 
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -32,6 +32,8 @@ import {
 } from "../data/rooms";
 
 import { JoinRoom } from "../share/JoinRoom";
+import { useAtomValue } from "../app-jotai";
+import { activeRoomLinkAtom } from "../collab/Collab";
 
 import { closeRoomsPage, getRoomPageLink } from "./roomsRoute";
 import "./RoomsPage.scss";
@@ -68,6 +70,29 @@ export const RoomsPage = ({
   const [copied, setCopied] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const copiedTimer = useRef<number>(0);
+  const shareRequest = useRef(0);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const transitionRef = useRef(false);
+  const [transitioning, setTransitioning] = useState(false);
+  const [search, setSearch] = useState("");
+  const activeRoomLink = useAtomValue(activeRoomLinkAtom);
+
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page) {
+      return;
+    }
+    const previousFocus = page.ownerDocument
+      .activeElement as HTMLElement | null;
+    const requests = shareRequest;
+    queryFocusableElements(page)[0]?.focus();
+    return () => {
+      requests.current++;
+      if (previousFocus?.isConnected) {
+        previousFocus.focus();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -93,7 +118,9 @@ export const RoomsPage = ({
   );
 
   const refreshRooms = async () => {
+    setLoading(true);
     setRooms(await fetchRooms());
+    setLoading(false);
   };
 
   const flashCopied = (key: string) => {
@@ -134,46 +161,101 @@ export const RoomsPage = ({
   };
 
   const openRoom = async (room: { roomId: string; roomKey: string }) => {
-    if (!collabAPI || !excalidrawAPI) {
+    if (!collabAPI || !excalidrawAPI || transitionRef.current) {
       return;
     }
-    // Hash navigation alone can't switch: startCollaboration() early-returns
-    // while the old socket exists, so tear it down first (no confirm).
-    stopSilently();
-    // Clear the old room's canvas up front: the join below preserves
-    // unsynced canvas content for offline recovery, which must never leak
-    // across rooms. (createRoom intentionally keeps it: the canvas seeds
-    // the new room.)
-    excalidrawAPI.updateScene({ elements: [] });
-    ownerWindow.history.pushState(
-      {},
-      APP_NAME,
-      getCollaborationLink({ roomId: room.roomId, roomKey: room.roomKey }),
-    );
-    const scene = await collabAPI.startCollaboration({
-      roomId: room.roomId,
-      roomKey: room.roomKey,
-    });
-    paintScene(excalidrawAPI, scene);
-    // pushState doesn't fire hashchange, so hide the page explicitly.
-    onClose();
+    transitionRef.current = true;
+    setTransitioning(true);
+    setActionError(null);
+    const previousElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const previousState = excalidrawAPI.getAppState();
+    const previousFiles = excalidrawAPI.getFiles();
+    const previousURL = ownerWindow.location.href;
+    try {
+      // Hash navigation alone can't switch: startCollaboration() early-returns
+      // while the old socket exists, so tear it down first (no confirm).
+      stopSilently();
+      // Clear the old room's canvas up front: the join below preserves
+      // unsynced canvas content for offline recovery, which must never leak
+      // across rooms.
+      excalidrawAPI.updateScene({ elements: [] });
+      ownerWindow.history.pushState(
+        {},
+        APP_NAME,
+        getCollaborationLink({ roomId: room.roomId, roomKey: room.roomKey }),
+      );
+      const scene = await collabAPI.startCollaboration({
+        roomId: room.roomId,
+        roomKey: room.roomKey,
+      });
+      paintScene(excalidrawAPI, scene);
+      if (!collabAPI.isCollaborating()) {
+        throw new Error(t("roomDialog.error_network"));
+      }
+      // pushState doesn't fire hashchange, so hide the page explicitly.
+      onClose();
+    } catch {
+      stopSilently();
+      ownerWindow.history.replaceState({}, APP_NAME, previousURL);
+      excalidrawAPI.addFiles(Object.values(previousFiles));
+      excalidrawAPI.updateScene({
+        elements: previousElements,
+        appState: previousState,
+      });
+      setActionError(t("roomDialog.error_network"));
+    } finally {
+      transitionRef.current = false;
+      setTransitioning(false);
+    }
   };
 
   const createRoom = async () => {
-    if (!collabAPI) {
+    if (!collabAPI || !excalidrawAPI || transitionRef.current) {
       return;
     }
-    setActionError(null);
-    stopSilently();
-    await collabAPI.startCollaboration(null);
-    // startCollaboration pushStates the new #room= link itself (no hashchange
-    // event), so hide the page explicitly. A brand-new room resolves null
-    // (nothing to load) while the current canvas becomes its content — the
-    // live session is what matters, so check that instead of the scene.
-    if (collabAPI.isCollaborating()) {
-      onClose();
-    } else {
+    if (
+      excalidrawAPI.getSceneElements().length > 0 &&
+      !ownerWindow.confirm(t("myRooms.confirmEmptyRoom"))
+    ) {
+      return;
+    }
+    transitionRef.current = true;
+    setTransitioning(true);
+    const previousElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const previousState = excalidrawAPI.getAppState();
+    const previousFiles = excalidrawAPI.getFiles();
+    const previousURL = ownerWindow.location.href;
+    try {
+      setActionError(null);
+      stopSilently();
+      // A new room starts empty, never as a copy of the current canvas:
+      // startCollaboration(null) would otherwise seed the room from whatever
+      // is on screen. Same wipe-before-switch as openRoom above (a previous
+      // room's content survives on the server snapshot, solo work stays in
+      // local browser storage).
+      excalidrawAPI.updateScene({ elements: [] });
+      await collabAPI.startCollaboration(null);
+      // startCollaboration pushStates the new #room= link itself (no hashchange
+      // event), so hide the page explicitly. A brand-new room resolves null
+      // (nothing to load) — the live session is what matters, so check that
+      // instead of the scene.
+      if (collabAPI.isCollaborating()) {
+        onClose();
+      } else {
+        throw new Error(t("myRooms.createError"));
+      }
+    } catch {
+      stopSilently();
+      ownerWindow.history.replaceState({}, APP_NAME, previousURL);
+      excalidrawAPI.addFiles(Object.values(previousFiles));
+      excalidrawAPI.updateScene({
+        elements: previousElements,
+        appState: previousState,
+      });
       setActionError(t("myRooms.createError"));
+    } finally {
+      transitionRef.current = false;
+      setTransitioning(false);
     }
   };
 
@@ -204,6 +286,7 @@ export const RoomsPage = ({
   };
 
   const toggleShare = async (room: ServerRoomEntry) => {
+    const request = ++shareRequest.current;
     if (sharingRoomId === room.roomId) {
       setSharingRoomId(null);
       setShareCode(null);
@@ -218,16 +301,23 @@ export const RoomsPage = ({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ url: getRoomPageLink(ownerWindow, room) }),
       });
+      const data = resp.ok ? await resp.json() : null;
+      if (request !== shareRequest.current) {
+        return;
+      }
       if (resp.ok) {
-        const data = await resp.json();
         setShareCode(typeof data?.code === "string" ? data.code : null);
       } else {
         setShareCode(null);
       }
     } catch {
-      setShareCode(null);
+      if (request === shareRequest.current) {
+        setShareCode(null);
+      }
     } finally {
-      setShareCodeLoading(false);
+      if (request === shareRequest.current) {
+        setShareCodeLoading(false);
+      }
     }
   };
 
@@ -252,8 +342,15 @@ export const RoomsPage = ({
     }
   };
 
-  const currentRoom = getCollaborationLinkData(ownerWindow.location.href);
+  const currentRoom = activeRoomLink
+    ? getCollaborationLinkData(activeRoomLink)
+    : null;
   const collaborating = !!collabAPI?.isCollaborating();
+  const visibleRooms = rooms?.filter((room) =>
+    `${room.name ?? ""} ${room.roomId}`
+      .toLocaleLowerCase()
+      .includes(search.trim().toLocaleLowerCase()),
+  );
 
   const formatLastActive = (timestamp: number) => {
     const minutes = Math.floor((Date.now() - timestamp) / 60000);
@@ -271,7 +368,32 @@ export const RoomsPage = ({
   };
 
   return (
-    <div className="RoomsPage" role="dialog" aria-label={t("myRooms.title")}>
+    <div
+      ref={pageRef}
+      className="RoomsPage"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("myRooms.title")}
+      aria-busy={transitioning}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === KEYS.ESCAPE) {
+          close();
+        } else if (event.key === KEYS.TAB && pageRef.current) {
+          const focusable = queryFocusableElements(pageRef.current);
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          const active = pageRef.current.ownerDocument.activeElement;
+          if (event.shiftKey && active === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && active === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }
+      }}
+    >
       <div className="RoomsPage__inner">
         <div className="RoomsPage__header">
           <h2 className="RoomsPage__title">{t("myRooms.title")}</h2>
@@ -286,14 +408,20 @@ export const RoomsPage = ({
           </button>
         </div>
 
-        {actionError && <div className="RoomsPage__error">{actionError}</div>}
+        {actionError && (
+          <div className="RoomsPage__error" role="alert">
+            {actionError}
+          </div>
+        )}
 
         <div className="RoomsPage__actions">
           <FilledButton
             size="large"
-            label={t("myRooms.newRoom")}
+            label={t("myRooms.newEmptyRoom")}
             icon={PlusIcon}
             onClick={createRoom}
+            disabled={transitioning || !collabAPI || !excalidrawAPI}
+            status={transitioning ? "loading" : null}
           />
           {collaborating && (
             <FilledButton
@@ -309,21 +437,38 @@ export const RoomsPage = ({
 
         <div className="RoomsPage__section">
           <h3 className="RoomsPage__sectionTitle">{t("myRooms.joinTitle")}</h3>
-          <JoinRoom onJoin={(linkData) => openRoom(linkData)} />
+          <JoinRoom onJoin={openRoom} disabled={transitioning} />
         </div>
 
         <div className="RoomsPage__section">
           <h3 className="RoomsPage__sectionTitle">{t("myRooms.listTitle")}</h3>
-          {loading && <div className="RoomsPage__empty">…</div>}
+          <TextField
+            label={t("myRooms.search")}
+            type="search"
+            fullWidth
+            value={search}
+            onChange={setSearch}
+          />
+          {loading && (
+            <div className="RoomsPage__empty" role="status">
+              {t("myRooms.loading")}
+            </div>
+          )}
           {!loading && rooms === null && (
-            <div className="RoomsPage__error">{t("myRooms.loadingError")}</div>
+            <div className="RoomsPage__error" role="alert">
+              {t("myRooms.loadingError")}
+              <FilledButton label={t("myRooms.retry")} onClick={refreshRooms} />
+            </div>
           )}
           {!loading && rooms !== null && rooms.length === 0 && (
             <div className="RoomsPage__empty">{t("myRooms.empty")}</div>
           )}
           {!loading && rooms !== null && rooms.length > 0 && (
             <div className="RoomsPage__list">
-              {rooms.map((room) => {
+              {visibleRooms?.length === 0 && (
+                <div role="status">{t("myRooms.noMatches")}</div>
+              )}
+              {visibleRooms?.map((room) => {
                 const isActive = currentRoom?.roomId === room.roomId;
                 const isEditing = editingRoomId === room.roomId;
                 const isConfirmingDelete =
@@ -346,11 +491,13 @@ export const RoomsPage = ({
                           className="RoomsPage__editInput"
                           defaultValue={room.name ?? ""}
                           placeholder={t("myRooms.renamePlaceholder")}
+                          aria-label={t("myRooms.renamePlaceholder")}
                           autoFocus
                           onKeyDown={(event) => {
                             if (event.key === KEYS.ENTER) {
                               submitRename(room, event.currentTarget.value);
                             } else if (event.key === KEYS.ESCAPE) {
+                              event.stopPropagation();
                               setEditingRoomId(null);
                             }
                           }}
@@ -362,7 +509,8 @@ export const RoomsPage = ({
                         <button
                           type="button"
                           className="RoomsPage__rowLabel"
-                          title={room.roomId}
+                          title={room.name || room.roomId}
+                          disabled={transitioning}
                           onClick={() => {
                             if (!isActive) {
                               openRoom({
@@ -404,6 +552,7 @@ export const RoomsPage = ({
                           className="RoomsPage__actionButton"
                           title={t("myRooms.rename")}
                           aria-label={t("myRooms.rename")}
+                          disabled={transitioning}
                           onClick={() => {
                             setConfirmingDeleteRoomId(null);
                             setEditingRoomId(room.roomId);
@@ -417,6 +566,7 @@ export const RoomsPage = ({
                         className="RoomsPage__actionButton"
                         title={t("myRooms.share")}
                         aria-label={t("myRooms.share")}
+                        disabled={transitioning}
                         onClick={() => toggleShare(room)}
                       >
                         {share}
@@ -430,6 +580,7 @@ export const RoomsPage = ({
                         }`}
                         title={t("myRooms.delete")}
                         aria-label={t("myRooms.delete")}
+                        disabled={transitioning}
                         onClick={() => {
                           if (isConfirmingDelete) {
                             confirmDelete(room);
@@ -486,6 +637,7 @@ export const RoomsPage = ({
                             }
                             icon={LinkIcon}
                             onClick={() => copyCode(room)}
+                            disabled={shareCodeLoading || !shareCode}
                           />
                         </div>
                       </div>

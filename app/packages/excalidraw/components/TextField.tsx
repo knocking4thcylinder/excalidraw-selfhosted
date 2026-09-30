@@ -5,6 +5,7 @@ import {
   useImperativeHandle,
   useLayoutEffect,
   useState,
+  useId,
 } from "react";
 
 import { Button } from "./Button";
@@ -29,6 +30,9 @@ type TextFieldProps = {
   placeholder?: string;
   isRedacted?: boolean;
   type?: "text" | "search";
+  disabled?: boolean;
+  "aria-invalid"?: boolean;
+  "aria-describedby"?: string;
 } & ({ value: string } | { defaultValue: string });
 
 export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
@@ -45,11 +49,15 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
       icon,
       className,
       type,
+      disabled,
+      "aria-invalid": ariaInvalid,
+      "aria-describedby": ariaDescribedBy,
       ...rest
     },
     ref,
   ) => {
     const innerRef = useRef<HTMLInputElement | null>(null);
+    const inputId = useId();
 
     useImperativeHandle(ref, () => innerRef.current!);
 
@@ -75,13 +83,21 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
         }}
       >
         {icon}
-        {label && <div className="ExcTextField__label">{label}</div>}
+        {label && (
+          <label className="ExcTextField__label" htmlFor={inputId}>
+            {label}
+          </label>
+        )}
         <div
           className={clsx("ExcTextField__input", {
             "ExcTextField__input--readonly": readonly,
           })}
         >
           <input
+            id={inputId}
+            disabled={disabled}
+            aria-invalid={ariaInvalid}
+            aria-describedby={ariaDescribedBy}
             className={clsx({
               "is-redacted":
                 "value" in rest &&
