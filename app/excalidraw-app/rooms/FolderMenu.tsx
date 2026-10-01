@@ -15,7 +15,7 @@ export const FolderMenu = ({
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; depth?: number }[];
   disabled: boolean;
   onChange: (value: string) => void;
   compact?: boolean;
@@ -46,6 +46,11 @@ export const FolderMenu = ({
             key={option.value}
             value={option.value}
             className="RoomsPage__folderOption"
+            style={{
+              paddingInlineStart: `${
+                0.5 + Math.min(option.depth ?? 0, 6) * 0.75
+              }rem`,
+            }}
           >
             <span className="RoomsPage__folderCheck">
               <DropdownMenu.ItemIndicator>

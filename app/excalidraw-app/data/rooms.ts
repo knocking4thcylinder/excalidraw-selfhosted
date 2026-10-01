@@ -37,6 +37,7 @@ export type ServerRoomEntry = {
 export type RoomFolder = {
   id: string;
   name: string;
+  parentId?: string | null;
 };
 
 export const fetchRoomFolders = async (): Promise<RoomFolder[] | null> => {
@@ -52,6 +53,7 @@ export const fetchRoomFolders = async (): Promise<RoomFolder[] | null> => {
 export const saveRoomFolder = async (
   name: string,
   id?: string,
+  parentId?: string | null,
 ): Promise<RoomFolder | null> => {
   try {
     const response = await fetch(
@@ -59,7 +61,7 @@ export const saveRoomFolder = async (
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, parentId }),
       },
     );
     return response.ok ? (await response.json()).folder : null;

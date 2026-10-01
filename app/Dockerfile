@@ -1,15 +1,33 @@
-FROM --platform=${BUILDPLATFORM} node:24@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63 AS build
+FROM scratch AS manifests
+
+COPY package.json yarn.lock .npmrc ./
+COPY excalidraw-app/package.json ./excalidraw-app/package.json
+COPY packages/common/package.json ./packages/common/package.json
+COPY packages/element/package.json ./packages/element/package.json
+COPY packages/excalidraw/package.json ./packages/excalidraw/package.json
+COPY packages/fractional-indexing/package.json ./packages/fractional-indexing/package.json
+COPY packages/laser-pointer/package.json ./packages/laser-pointer/package.json
+COPY packages/math/package.json ./packages/math/package.json
+COPY packages/utils/package.json ./packages/utils/package.json
+
+FROM --platform=${BUILDPLATFORM} node:24@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63 AS dependencies
 
 WORKDIR /opt/node_app
 
-COPY . .
+COPY --from=manifests / ./
+
+ARG TARGETARCH
 
 # do not ignore optional dependencies:
 # Error: Cannot find module @rollup/rollup-linux-x64-gnu
 RUN --mount=type=cache,target=/root/.cache/yarn \
-    npm_config_target_arch=${TARGETARCH} yarn --frozen-lockfile --network-timeout 600000
+    HUSKY=0 npm_config_target_arch=${TARGETARCH} yarn --frozen-lockfile --network-timeout 600000
+
+FROM dependencies AS build
 
 ARG NODE_ENV=production
+
+COPY . .
 
 RUN npm_config_target_arch=${TARGETARCH} yarn build:app:docker
 

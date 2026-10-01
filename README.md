@@ -110,6 +110,46 @@ cd ~/excalidraw && ./deploy.sh   # git pull (when a checkout) + rebuild + swap +
 No bundles: the Deck updates via `git pull` (needs one read credential for
 this private repo), falling back to files synced from the Mac.
 
+For smaller updates, deploy only the affected component:
+
+```bash
+./deploy.sh app       # build/swap frontend only; leave backend and proxy running
+./deploy.sh backend   # update shortcode/server.js only; no frontend build
+./deploy.sh full      # default: frontend + shortcode backend + proxy routes
+./deploy.sh app --local  # deploy working-tree files without git pull
+```
+
+Selective modes still pull the whole checkout unless `--local` is passed, but
+only deploy the selected component. Use `full` for changes spanning components
+or proxy routes. `backend` updates the shortcode/rooms API, not the external
+`excalidraw-room` collaboration image or the standalone root `server.js`.
+Each deployment prints stage timings, including dependency and frontend builds.
+On Podman's `vfs` driver, builds automatically use a reusable, pinned Node
+container with a host-mounted `.build-cache/` workspace. Source files are synced
+without touching the checkout's dependencies or build output. Dependencies
+persist between builds; only the small nginx runtime image is rebuilt. The
+builder stops after each build and restarts on demand. This path requires rsync,
+but does not require Node or Yarn on the host.
+
+Other storage drivers retain the multi-stage container build. Override selection
+with `DEPLOY_BUILD_MODE=fast` or `DEPLOY_BUILD_MODE=container`. Both paths key
+dependency caching by the lockfile, workspace manifests, and pinned Node image;
+the first build populates the cache, and source-only changes skip installation.
+The container path retains dependencies under the `excalidraw-build-deps` image
+tag. Workspace additions must also be listed in the Dockerfile's manifest stage
+(`node --test deploy.test.js` checks this).
+To validate a build without changing the deployment image tag, run
+`DEPLOY_IMAGE_TAG=excalidraw-verify ./deploy.sh build`; no live containers are swapped.
+
+Image cleanup is no longer part of each deployment. The next deployment (or
+`./deploy.sh start`) installs the weekly cleanup timer. To clean up immediately,
+run `./deploy.sh cleanup` manually.
+Cleanup preserves tagged images (including dependencies) and refuses to run
+during a deployment/build. Fast builds require 6 GiB of free space; multi-stage
+builds require 12 GiB. Both the workspace and Podman storage filesystems are
+checked. Override the threshold with `DEPLOY_MIN_FREE_KB` (KiB)
+only when sufficient space is available for your storage driver.
+
 ## Server recovery and diagnostics
 
 The whole stack is managed by a boot-enabled systemd service:
@@ -151,11 +191,31 @@ Deployment preserves `shortcode-data/` and prevents concurrent deployments.
 
 ### Room folders
 
-In **My rooms**, use **New folder** to create a folder, then use the selector
-on each room to move it into a folder or back to **Unfiled**. The **Folders**
-selector filters the room list; room search applies within the selected folder.
-Select a folder to rename or delete it. Deleting a folder keeps its rooms and
-their drawings, moving them to **Unfiled**.
+**My rooms** displays an editor-style file tree, with expandable folders and
+rooms nested beneath them. Click a folder to expand or collapse it; click a
+room to open its drawing. Rooms without a folder appear at the root.
+The explorer docks on the right half of the screen, leaving a usable drawing
+canvas on the left. Its arrow collapses it to a narrow rail; expanding it
+restores your search and open folders. **Expand all** and **Collapse all**
+control the whole tree. Opening or creating a room keeps the explorer open.
+On phones, the expanded panel uses most of the screen; collapse it to draw.
+Search finds rooms and folder paths across the entire tree, automatically
+revealing matching branches without changing your saved expansion state.
+Folders can be nested: select a folder and use **New folder** to create a
+subfolder, or choose **Parent folder** in the editor. Choose **Top level** for a
+root folder. Editing a folder's parent moves it together with its subfolders;
+a folder cannot be moved into itself or a descendant. Names must be unique
+within the same parent, but may be reused in different branches.
+
+Drag rooms or folders onto another folder to move them. While dragging, the
+**Top level** target moves items back to the root. On tablets, the room's move
+menu and the folder editor's **Parent folder** menu provide the same operations
+without dragging. Destination menus show full paths.
+Use Up/Down, Left/Right, Home/End, and Enter to navigate the tree with a keyboard.
+Press F2 to rename a focused room or folder.
+Click the tree's heading to deselect a folder before creating a root folder.
+Select a folder to rename, move, or delete it. Deleting a folder also removes
+its subfolders, but keeps all their rooms and drawings, moving them to **Unfiled**.
 
 Folders are shared across clients of this self-hosted instance, like the room
 registry, and persist in `shortcode-data/folders.json`. The service supports a

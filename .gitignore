@@ -7,3 +7,4 @@ certs/
 reinstall.sh
 fork/
 .deploy.lock
+.build-cache/

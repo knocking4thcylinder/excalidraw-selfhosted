@@ -415,11 +415,11 @@ const ExcalidrawWrapper = () => {
   const userToFollow = useAtomValue(userToFollowAtom);
   const activeRoomLink = useAtomValue(activeRoomLinkAtom);
 
-  // Standalone Rooms page route (#rooms). The canvas, Collab socket and scene
-  // stay mounted underneath; the page is a full-screen overlay.
+  // The rooms sidebar route keeps the canvas and collaboration mounted.
   const [isRoomsRoute, setIsRoomsRoute] = useState(() =>
     isRoomsHash(window.location.hash),
   );
+  const [roomsSidebarCollapsed, setRoomsSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     const syncRoomsRoute = () => {
@@ -1014,6 +1014,8 @@ const ExcalidrawWrapper = () => {
       style={{ height: "100%" }}
       className={clsx("excalidraw-app", {
         "is-collaborating": isCollaborating,
+        "rooms-sidebar-open": isRoomsRoute,
+        "rooms-sidebar-collapsed": isRoomsRoute && roomsSidebarCollapsed,
       })}
     >
       <Excalidraw
@@ -1177,6 +1179,7 @@ const ExcalidrawWrapper = () => {
             collabAPI={collabAPI}
             excalidrawAPI={excalidrawAPI}
             onClose={onRoomsClose}
+            onCollapseChange={setRoomsSidebarCollapsed}
           />
         )}
 

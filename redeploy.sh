@@ -5,42 +5,75 @@ set -euo pipefail
 # ssh has a minimal PATH, so add it explicitly.
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 BASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+APP_IMAGE=${DEPLOY_IMAGE_TAG:-excalidraw-selfhost}
 cd "$BASE"
+MODE=${1:-full}
+case "$MODE" in full|app|backend) ;; *) echo 'Usage: ./redeploy.sh [full|app|backend] [--local]' >&2; exit 2 ;; esac
+if [ "$#" -gt 0 ]; then shift; fi
+LOCAL=false
+if [ "${1:-}" = --local ]; then LOCAL=true; shift; fi
+[ "$#" -eq 0 ] || { echo 'Usage: ./redeploy.sh [full|app|backend] [--local]' >&2; exit 2; }
 exec 9>"$BASE/.deploy.lock"
 flock -n 9 || { echo 'Another deployment is running.' >&2; exit 1; }
+STARTED=$SECONDS
+STAGE_STARTED=$SECONDS
+STAGE_LABEL='update checkout'
 
-echo "== 1/5 update checkout (monorepo; app source is ./app) =="
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+stage() {
+  printf 'TIMING: %s: %ss\n' "$STAGE_LABEL" "$((SECONDS - STAGE_STARTED))"
+  printf '\n== %s ==\n' "$1"
+  STAGE_STARTED=$SECONDS
+  STAGE_LABEL=$1
+}
+
+echo "== $MODE deploy: update checkout =="
+if "$LOCAL"; then
+  echo 'Building local files; git pull skipped.'
+elif git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git pull --ff-only
 else
   echo "WARNING: not a git checkout — GitHub updates will NOT be downloaded; building local files."
 fi
-bash "$BASE/deploy.sh" start
-
-echo "== 2/5 image build (yarn layers cached; src-only changes) =="
-(cd app && sudo podman build -t excalidraw-selfhost .)
-# vfs duplicates layers per build (120G pileup once); drop dangling images
-# from older builds so the disk never fills again (tagged/used images kept)
-sudo podman image prune -f >/dev/null 2>&1 || true
-
-echo "== 3/5 shortcode service (codes persisted to ./shortcode-data/codes.json) =="
-trap 'echo "Deployment failed; attempting to restart existing services." >&2; sudo systemctl start excalidraw.service excalidraw-shortcode.service excalidraw-caddy.service || true' ERR
-sudo systemctl stop excalidraw-shortcode.service
-cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
-sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
-mkdir -p "$BASE/shortcode-data"
-sudo podman run -d --name excalidraw-shortcode --restart always --network host \
-  -e PORT=3003 \
-  -v "$BASE/shortcode-data:/data" \
-  -v "$BASE/shortcode-server.js:/srv/server.js:ro" \
-  docker.io/library/node:20-alpine node /srv/server.js
-
-echo "== 4/5 caddy route update + restart =="
+stage 'preflight'
 if [ -z "${FQDN:-}" ]; then
-  FQDN=$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)
+  FQDN=$(tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
 fi
-[ -z "${FQDN:-}" ] && { echo "ERROR: cannot determine MagicDNS name (export FQDN)"; exit 1; }
-cat > "$BASE/Caddyfile" <<CDATA
+[ -n "$FQDN" ] || { echo 'Cannot determine Tailscale hostname; set FQDN.' >&2; exit 1; }
+export FQDN
+for service in excalidraw-room excalidraw-shortcode excalidraw excalidraw-caddy; do
+  sudo podman container exists "$service" || { echo "Missing container $service. Run ./install.sh first." >&2; exit 1; }
+done
+if ! sudo systemctl cat excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service excalidraw-cleanup.service excalidraw-cleanup.timer >/dev/null 2>&1; then
+  bash "$BASE/deploy.sh" start
+else
+  bash "$BASE/deploy.sh" renew-cert
+  sudo systemctl start excalidraw-room.service excalidraw-shortcode.service excalidraw.service excalidraw-caddy.service
+fi
+
+if [ "$MODE" != backend ]; then
+  stage 'app image build'
+  bash "$BASE/deploy.sh" build
+fi
+
+trap 'echo "Deployment failed; attempting to restart existing services." >&2; sudo systemctl start excalidraw.service excalidraw-shortcode.service excalidraw-caddy.service || true' ERR
+if [ "$MODE" != app ]; then
+  stage 'shortcode backend (persisted data retained)'
+  sudo systemctl stop excalidraw-shortcode.service
+  cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
+  sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
+  mkdir -p "$BASE/shortcode-data"
+  sudo podman create --name excalidraw-shortcode --restart always --network host \
+    -e PORT=3003 \
+    -v "$BASE/shortcode-data:/data" \
+    -v "$BASE/shortcode-server.js:/srv/server.js:ro" \
+    docker.io/library/node:20-alpine node /srv/server.js
+  sudo systemctl start excalidraw-shortcode.service
+fi
+
+if [ "$MODE" = full ]; then
+  stage 'caddy routes'
+  CADDY_CONFIG=$(mktemp)
+  cat > "$CADDY_CONFIG" <<CDATA
 $FQDN:8443 {
   tls /certs/$FQDN.crt /certs/$FQDN.key
   handle /s/* {
@@ -63,16 +96,23 @@ $FQDN:8443 {
   }
 }
 CDATA
-sudo podman restart excalidraw-shortcode 2>/dev/null || true
-sudo podman container exists excalidraw-caddy || { echo 'Missing HTTPS container; run ./install.sh first.' >&2; exit 1; }
+  if ! cmp -s "$CADDY_CONFIG" "$BASE/Caddyfile"; then
+    cat "$CADDY_CONFIG" > "$BASE/Caddyfile"
+    sudo systemctl restart excalidraw-caddy.service
+  else
+    echo 'Caddy routes unchanged; restart skipped.'
+  fi
+  rm -f "$CADDY_CONFIG"
+fi
 
-echo "== 5/5 app container swap =="
-sudo systemctl stop excalidraw.service
-sudo podman rm -f excalidraw 2>/dev/null || true
-sudo podman run -d --name excalidraw --restart always --network host \
-  -e FQDN_HOST="$FQDN" \
-  excalidraw-selfhost \
-  sh -c 'CFG=/etc/nginx/conf.d/default.conf; grep -q excalidraw-cache-policy $CFG || { printf "%s\n" "    # excalidraw-cache-policy" "    location = /index.html {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"no-store\";" "    }" "    location /assets/ {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"public, max-age=31536000, immutable\";" "    }" > /tmp/cachepol.conf; sed -i -e "/server_name  localhost;/r /tmp/cachepol.conf" $CFG; }; nginx -t && \
+if [ "$MODE" != backend ]; then
+  stage 'app container swap'
+  sudo systemctl stop excalidraw.service
+  sudo podman rm -f excalidraw 2>/dev/null || true
+  sudo podman create --name excalidraw --restart always --network host \
+    -e FQDN_HOST="$FQDN" \
+    "$APP_IMAGE" \
+    sh -c 'CFG=/etc/nginx/conf.d/default.conf; grep -q excalidraw-cache-policy $CFG || { printf "%s\n" "    # excalidraw-cache-policy" "    location = /index.html {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"no-store\";" "    }" "    location /assets/ {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"public, max-age=31536000, immutable\";" "    }" > /tmp/cachepol.conf; sed -i -e "/server_name  localhost;/r /tmp/cachepol.conf" $CFG; }; nginx -t && \
     find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\\1/" {} + && \
     find /usr/share/nginx/html/assets -name "*.js" -exec \
       sed -i -e "s|https://oss-collab\\.excalidraw\\.com|wss://$FQDN_HOST:8443|g" \
@@ -80,5 +120,9 @@ sudo podman run -d --name excalidraw --restart always --network host \
     R=$(grep -rlo "oss-collab" /usr/share/nginx/html/assets | wc -l) && \
     [ "$R" = "0" ] && echo "PATCH_OK_WSS" && \
     nginx -g "daemon off;"'
-sudo systemctl restart excalidraw-caddy.service
-bash "$BASE/deploy.sh" start
+  sudo systemctl start excalidraw.service
+fi
+stage 'HTTPS checks'
+bash "$BASE/deploy.sh" check
+printf 'TIMING: HTTPS checks: %ss\n' "$((SECONDS - STAGE_STARTED))"
+printf 'TIMING: total %s deploy: %ss\n' "$MODE" "$((SECONDS - STARTED))"

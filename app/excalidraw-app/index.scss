@@ -85,6 +85,18 @@
   }
 }
 
+.excalidraw-app.rooms-sidebar-open {
+  width: 50vw;
+
+  @media (max-width: 600px) {
+    width: 100%;
+  }
+
+  &.rooms-sidebar-collapsed {
+    width: calc(100% - 2.75rem);
+  }
+}
+
 .excalidraw-app.is-collaborating {
   [data-testid="clear-canvas-button"] {
     display: none;

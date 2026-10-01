@@ -30,6 +30,7 @@ for (const script of [path.join(__dirname, "server.js"), path.join(__dirname, ".
       legacy: { key: "secret", createdAt: 1, lastActiveAt: 1, hasScene: true },
     }));
     await writeFile(path.join(directory, "scenes.json"), JSON.stringify({ legacy: scene }));
+    await writeFile(path.join(directory, "folders.json"), JSON.stringify({ "legacy-folder": "Legacy folder" }));
 
     const start = async () => {
       child = spawn(process.execPath, [script], {
@@ -62,7 +63,8 @@ for (const script of [path.join(__dirname, "server.js"), path.join(__dirname, ".
       return { status: response.status, body: await response.json() };
     };
     await start();
-    assert.deepEqual((await request("/api/rooms/folders")).body.folders, []);
+    assert.deepEqual((await request("/api/rooms/folders")).body.folders, [{ id: "legacy-folder", name: "Legacy folder" }]);
+    assert.equal((await request("/api/rooms/folders/legacy-folder", "DELETE")).status, 200);
     assert.equal((await request("/api/rooms")).body.rooms[0].folderId, undefined);
     const created = await request("/api/rooms/folders", "POST", { name: " School " });
     assert.equal(created.status, 200);
@@ -86,9 +88,35 @@ for (const script of [path.join(__dirname, "server.js"), path.join(__dirname, ".
     await start();
     assert.deepEqual((await request("/api/rooms/folders")).body.folders, [{ id: folder.id, name: "Classes" }]);
     assert.equal((await request("/api/rooms")).body.rooms[0].folderId, folder.id);
+    const childFolder = (await request("/api/rooms/folders", "POST", { name: "Math", parentId: folder.id })).body.folder;
+    const grandchild = (await request("/api/rooms/folders", "POST", { name: "Algebra", parentId: childFolder.id })).body.folder;
+    assert.equal(childFolder.parentId, folder.id);
+    assert.equal(grandchild.parentId, childFolder.id);
+    assert.equal((await request("/api/rooms/folders", "POST", { name: "math", parentId: folder.id })).status, 409);
+    const sameNameRoot = await request("/api/rooms/folders", "POST", { name: "Math", parentId: null });
+    assert.equal(sameNameRoot.status, 200);
+    assert.equal((await request(`/api/rooms/folders/${childFolder.id}`, "POST", { name: "Math", parentId: null })).status, 409);
+    assert.equal((await request(`/api/rooms/folders/${sameNameRoot.body.folder.id}`, "DELETE")).status, 200);
+    for (const parentId of ["missing", "__proto__", 123]) {
+      assert.equal((await request("/api/rooms/folders", "POST", { name: "Invalid", parentId })).status, 400);
+    }
+    for (const parentId of [folder.id, childFolder.id, grandchild.id]) {
+      assert.equal((await request(`/api/rooms/folders/${folder.id}`, "POST", { name: "Classes", parentId })).status, 400);
+    }
+    assert.equal((await request(`/api/rooms/folders/${childFolder.id}`, "POST", { name: "Mathematics" })).body.folder.parentId, folder.id);
+    assert.equal((await request(`/api/rooms/folders/${childFolder.id}`, "POST", { name: "Mathematics", parentId: null })).status, 200);
+    assert.equal((await request("/api/rooms/folders")).body.folders.find((entry) => entry.id === grandchild.id).parentId, childFolder.id);
+    assert.equal((await request(`/api/rooms/folders/${childFolder.id}`, "POST", { name: "Mathematics", parentId: folder.id })).status, 200);
+    const nestedExit = once(child, "exit");
+    child.kill();
+    await nestedExit;
+    await start();
+    const persistedFolders = (await request("/api/rooms/folders")).body.folders;
+    assert.equal(persistedFolders.find((entry) => entry.id === childFolder.id).parentId, folder.id);
+    assert.equal(persistedFolders.find((entry) => entry.id === grandchild.id).parentId, childFolder.id);
     assert.equal((await request("/api/rooms/legacy/folder", "POST", { key: "secret", folderId: null })).status, 200);
     assert.equal((await request("/api/rooms")).body.rooms[0].folderId, undefined);
-    await request("/api/rooms/legacy/folder", "POST", { key: "secret", folderId: folder.id });
+    await request("/api/rooms/legacy/folder", "POST", { key: "secret", folderId: grandchild.id });
     assert.equal((await request(`/api/rooms/folders/${folder.id}`, "DELETE")).status, 200);
     assert.deepEqual((await request("/api/rooms/folders")).body.folders, []);
     const remainingRoom = (await request("/api/rooms")).body.rooms[0];

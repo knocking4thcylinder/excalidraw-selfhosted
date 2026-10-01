@@ -14,6 +14,7 @@ const FOLDERS_FILE = process.env.FOLDERS_FILE || require("path").join(require("p
 
 let folders = {};
 try { folders = JSON.parse(fs.readFileSync(FOLDERS_FILE, "utf8")); } catch {}
+folders = Object.fromEntries(Object.entries(folders).map(([id, folder]) => [id, typeof folder === "string" ? { name: folder } : folder]));
 const saveFolders = () => fs.writeFileSync(FOLDERS_FILE, JSON.stringify(folders, null, 2));
 
 let codes = {};
@@ -151,7 +152,7 @@ http
     }
 
     if (req.method === "GET" && u.pathname === "/api/rooms/folders") {
-      json(res, 200, { folders: Object.entries(folders).map(([id, name]) => ({ id, name })) });
+      json(res, 200, { folders: Object.entries(folders).map(([id, folder]) => ({ id, ...folder })) });
       return;
     }
 
@@ -166,27 +167,50 @@ http
           if (req.method === "DELETE") {
             if (!id) { json(res, 400, { error: "folder id required" }); return; }
             const nextFolders = { ...folders };
-            delete nextFolders[id];
+            const deletedIds = new Set([id]);
+            let previousSize;
+            do {
+              previousSize = deletedIds.size;
+              for (const [folderId, folder] of Object.entries(folders)) {
+                if (deletedIds.has(folder.parentId)) deletedIds.add(folderId);
+              }
+            } while (deletedIds.size !== previousSize);
+            for (const folderId of deletedIds) delete nextFolders[folderId];
             fs.writeFileSync(FOLDERS_FILE, JSON.stringify(nextFolders, null, 2));
             folders = nextFolders;
             for (const room of Object.values(rooms)) {
-              if (room.folderId === id) delete room.folderId;
+              if (deletedIds.has(room.folderId)) delete room.folderId;
             }
             saveRooms();
             json(res, 200, { ok: true });
             return;
           }
           const payload = JSON.parse(body);
+          if (!payload || typeof payload !== "object") { json(res, 400, { error: "invalid folder" }); return; }
           const name = typeof payload.name === "string" ? payload.name.trim() : "";
           if (!name || name.length > 64) { json(res, 400, { error: "folder name must be 1–64 characters" }); return; }
-          if (Object.entries(folders).some(([existingId, existingName]) => existingId !== id && existingName.toLowerCase() === name.toLowerCase())) {
+          const parentId = payload.parentId === undefined ? (id ? folders[id].parentId ?? null : null) : payload.parentId;
+          if (parentId !== null && (typeof parentId !== "string" || !Object.hasOwn(folders, parentId))) {
+            json(res, 400, { error: "unknown parent folder" }); return;
+          }
+          let ancestorId = parentId;
+          const ancestors = new Set();
+          while (ancestorId !== null) {
+            if (ancestorId === id || ancestors.has(ancestorId)) {
+              json(res, 400, { error: "folder cannot contain itself" }); return;
+            }
+            ancestors.add(ancestorId);
+            ancestorId = folders[ancestorId]?.parentId ?? null;
+          }
+          if (Object.entries(folders).some(([existingId, folder]) => existingId !== id && (folder.parentId ?? null) === parentId && folder.name.toLowerCase() === name.toLowerCase())) {
             json(res, 409, { error: "folder name already exists" }); return;
           }
           const folderId = id || crypto.randomUUID();
           const previousFolders = folders;
-          folders = { ...folders, [folderId]: name };
+          const folder = { name, ...(parentId ? { parentId } : {}) };
+          folders = { ...folders, [folderId]: folder };
           try { saveFolders(); } catch (error) { folders = previousFolders; throw error; }
-          json(res, 200, { folder: { id: folderId, name } });
+          json(res, 200, { folder: { id: folderId, ...folder } });
         } catch (error) {
           json(res, error instanceof SyntaxError ? 400 : 500, { error: "could not save folder" });
         }
