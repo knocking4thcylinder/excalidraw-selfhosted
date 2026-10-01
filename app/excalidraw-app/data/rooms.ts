@@ -31,6 +31,70 @@ export type ServerRoomEntry = {
   hasScene: boolean;
   // optional display label (rename feature v2); roomId/key stay stable
   name?: string;
+  folderId?: string;
+};
+
+export type RoomFolder = {
+  id: string;
+  name: string;
+};
+
+export const fetchRoomFolders = async (): Promise<RoomFolder[] | null> => {
+  try {
+    const response = await fetch("/api/rooms/folders", { cache: "no-store" });
+    const data = response.ok ? await response.json() : null;
+    return Array.isArray(data?.folders) ? data.folders : null;
+  } catch {
+    return null;
+  }
+};
+
+export const saveRoomFolder = async (
+  name: string,
+  id?: string,
+): Promise<RoomFolder | null> => {
+  try {
+    const response = await fetch(
+      `/api/rooms/folders${id ? `/${encodeURIComponent(id)}` : ""}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      },
+    );
+    return response.ok ? (await response.json()).folder : null;
+  } catch {
+    return null;
+  }
+};
+
+export const deleteRoomFolder = async (id: string): Promise<boolean> => {
+  try {
+    return (
+      await fetch(`/api/rooms/folders/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      })
+    ).ok;
+  } catch {
+    return false;
+  }
+};
+
+export const moveRoomToFolder = async (
+  room: ServerRoomEntry,
+  folderId: string | null,
+): Promise<boolean> => {
+  try {
+    return (
+      await fetch(`/api/rooms/${encodeURIComponent(room.roomId)}/folder`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: room.key, folderId }),
+      })
+    ).ok;
+  } catch {
+    return false;
+  }
 };
 
 // private

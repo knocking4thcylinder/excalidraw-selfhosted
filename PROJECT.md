@@ -40,7 +40,7 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
 (full history preserved, incl. the Firestore-load fix `891781cd`); its old
 remote is frozen. Upstream pulls: `git subtree pull --prefix=app
 https://github.com/excalidraw/excalidraw.git <tag> --squash`. No bundles:
-the Deck updates via `git pull` inside `redeploy.sh` (needs one
+the Deck updates via `git pull` inside `deck-redeploy-fork.sh` (needs one
 read credential for this private repo; otherwise sync files from the Mac).
 
 1. **Packaging** (repo root):
@@ -123,7 +123,7 @@ read credential for this private repo; otherwise sync files from the Mac).
 - **MacBook** (`macbook`, `100.64.0.11`)
   - route-fixer daemon loaded as `user.fixtsroutes`
   - `/etc/hosts` entry `steamdeck.example.ts.net → 100.64.0.10`
-  - `~/src/excalidraw/` ← this repo on disk (monorepo)
+  - `~/src/excalidraw-deck/` ← the packaging repo on disk
 - **Steam Deck** (`steamdeck`, `100.64.0.10`) — runs the live stack; has
   passwordless `sudo podman` via `/etc/sudoers.d/deck-podman` (they ran the
   chmod). `/home/excalidraw/install.sh` matches the repo (md5 equal).
@@ -137,39 +137,10 @@ read credential for this private repo; otherwise sync files from the Mac).
 | On | Command |
 |---|---|
 | Deck (first ever run) | `sudo steamos-readonly disable` then `bash ~/excalidraw/install.sh` |
-| Deck (after fork/image change) | `bash ~/excalidraw/redeploy.sh` |
+| Deck (after fork/image change) | `bash ~/excalidraw/redeploy-fork.sh` |
 | Post-OS-update wipe on Deck | `bash ~/excalidraw/reinstall.sh` (just calls install.sh) |
-| Mac network fixes | `sudo bash ~/src/excalidraw/mac/install-mac.sh` |
+| Mac network fixes | `sudo bash ~/src/excalidraw-deck/mac/install-mac.sh` |
 | Android APK build + install | `cd android && ./build.sh && adb install -r build/Excalidraw.apk` |
-
-## Incident 2026-09-11: rooms opened empty (root causes, all fixed)
-
-1. **Boot race — double `startCollaboration`, null wins** (`app/.../Collab.tsx`).
-   On boot the mount effect fires twice ~20ms apart with identical deps.
-   Root cause, proven by tracing: the effect depends on `activeRoomLink`,
-   which flips empty → room URL as a *consequence* of the first call
-   (`setActiveRoomLink` in `startCollaboration`), self-triggering run #2.
-   Run #2 sees the fresh socket and resolves `null` instantly, beating the
-   real snapshot load, so the canvas stayed empty forever. Fix: an in-flight
-   load for the SAME room is now shared (`pendingScenePromise` +
-   `pendingSceneRoomId`, captured synchronously — `portal.roomId` is
-   assigned too late, after the socket.io import). Different-room and
-   settled-load behavior unchanged.
-2. **Ghost campers fed empty INITs.** Stale tabs with empty scenes held rooms
-   open; joiners resolved to their empty INIT and discarded the snapshot
-   (resolved promises can't be un-resolved). Fix: an empty reconciled INIT
-   now falls back to the stored snapshot; live non-empty content still wins.
-3. **Duplicate rootless `excalidraw-room` container** fought the canonical
-   root one for `:3002` (crash loop). Never run bare `podman` on the Deck —
-   always `sudo podman` (rootless + root runtimes share host networking).
-   Fixed + `/etc/sudoers.d/deck-podman` (NOPASSWD podman/systemctl/tee).
-4. **Stale bundles pinned by HTTP cache.** `index.html` is now `no-store`,
-   hashed assets `immutable` (entrypoint injects the nginx policy).
-5. **Monorepo.** The fork is `app/` (subtree, full history); the Deck's
-   `~/excalidraw` IS this repo. No bundles. `excalidraw-selfhosted-fork`
-   remote is frozen; local `./excalidraw-fork` (nested, gitignored) remains
-   the upstream-tracking clone (`git subtree pull --prefix=app …` for
-   upstream updates). Repo lives at `~/src/excalidraw/`.
 
 ## Known trade-offs / gotchas worth inches if extending
 
@@ -194,27 +165,6 @@ read credential for this private repo; otherwise sync files from the Mac).
 - **SteamOS updates wipe podman's `/var/...` state** — but the installer moves
   storage to `/home/containers/storage` (survives updates) and `reinstall.sh`
   regenerates containers from the fork clone in `~/excalidraw/fork`.
-
-## Offline-first rooms (DONE)
-
-Workbox shell precached (`app/excalidraw-app/vite.config.mts` + `registerSW`;
-`/s/*` denylisted so short codes stay server-side). Offline boot with a room
-link keeps the canvas and persists locally — silently, no banner (a previous
-unstyled banner blocked touches and ate tablet screen space). Reconnect is
-silent too (4s poll + socket connect/disconnect + visibility/focus, with a
-cheap `/api/rooms` reachability probe gating socket restarts; retries never
-wipe pending offline strokes). Merges with the snapshot on reconnect
-(`paintOfflineRecovery` union + direct paint past the spent initial promise);
-empty states never overwrite (`409` + client guards + save suppression while
-recovery pending). Crash-safety: every edit writes a room-scoped device
-backup (throttled ~1s, flushed on unload/stop, room-matched on boot so
-nothing leaks across rooms), generic local saves resume after a healthy join
-(with a never-overwrite-nonempty-with-empty guard), and server snapshots save
-every ~5s (`ROOM_SNAPSHOT_INTERVAL_MS`, `keepalive` on unload). Join clears
-nothing that isn't synced — except explicit room switches, which wipe upfront
-(`RoomsPage.openRoom`, hashchange; create keeps canvas as seed). Regression
-tests: `app/excalidraw-app/tests/rooms-offline.test.tsx` (both must pass;
-needs the `isTestEnv` fallback-timer gate in `app_constants.ts`).
 
 ## Where I'd go next (for a successor model)
 

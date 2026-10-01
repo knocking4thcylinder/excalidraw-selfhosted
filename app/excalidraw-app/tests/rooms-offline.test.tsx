@@ -190,8 +190,19 @@ describe("offline-first rooms", () => {
     // server unreachable again for this leg (previous test left a canned
     // snapshot behind in the shared holder).
     loadHolder.impl = async () => null;
+    window.location.hash = `#room=${ROOM_ID},${ROOM_KEY}`;
+    appJotaiStore.set(offlineRoomPendingAtom, null);
 
     await render(<ExcalidrawApp />);
+    await waitFor(
+      () => {
+        expect(appJotaiStore.get(offlineRoomPendingAtom)).toEqual({
+          roomId: ROOM_ID,
+          roomKey: ROOM_KEY,
+        });
+      },
+      { timeout: 25000 },
+    );
 
     const { CaptureUpdateAction: CUA } = await import("@excalidraw/excalidraw");
     await act(async () => {

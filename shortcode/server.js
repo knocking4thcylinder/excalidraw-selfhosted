@@ -10,6 +10,11 @@ const PORT = process.env.PORT || 3003;
 const FILE = process.env.CODES_FILE || "/data/codes.json";
 const ROOMS_FILE = process.env.ROOMS_FILE || "/data/rooms.json";
 const SCENES_FILE = process.env.SCENES_FILE || "/data/scenes.json";
+const FOLDERS_FILE = process.env.FOLDERS_FILE || require("path").join(require("path").dirname(ROOMS_FILE), "folders.json");
+
+let folders = {};
+try { folders = JSON.parse(fs.readFileSync(FOLDERS_FILE, "utf8")); } catch {}
+const saveFolders = () => fs.writeFileSync(FOLDERS_FILE, JSON.stringify(folders, null, 2));
 
 let codes = {};
 try { codes = JSON.parse(fs.readFileSync(FILE, "utf8")); } catch {}
@@ -148,8 +153,79 @@ http
     if (req.method === "GET" && u.pathname === "/api/rooms") {
       json(res, 200, {
         rooms: Object.entries(rooms)
-          .map(([roomId, r]) => ({ roomId, key: r.key, createdAt: r.createdAt, lastActiveAt: r.lastActiveAt, hasScene: r.hasScene, ...(r.name ? { name: r.name } : {}) }))
+          .map(([roomId, r]) => ({ roomId, key: r.key, createdAt: r.createdAt, lastActiveAt: r.lastActiveAt, hasScene: r.hasScene, ...(r.name ? { name: r.name } : {}), ...(r.folderId && Object.hasOwn(folders, r.folderId) ? { folderId: r.folderId } : {}) }))
           .sort((a, b) => b.lastActiveAt - a.lastActiveAt),
+      });
+      return;
+    }
+
+    if (req.method === "GET" && u.pathname === "/api/rooms/folders") {
+      json(res, 200, { folders: Object.entries(folders).map(([id, name]) => ({ id, name })) });
+      return;
+    }
+
+    const folderRoute = u.pathname.match(/^\/api\/rooms\/folders(?:\/([A-Za-z0-9_-]{1,64}))?$/);
+    if (folderRoute && (req.method === "POST" || req.method === "DELETE")) {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        try {
+          const id = folderRoute[1];
+          if (id && !Object.hasOwn(folders, id)) { json(res, 404, { error: "unknown folder" }); return; }
+          if (req.method === "DELETE") {
+            if (!id) { json(res, 400, { error: "folder id required" }); return; }
+            const nextFolders = { ...folders };
+            delete nextFolders[id];
+            fs.writeFileSync(FOLDERS_FILE, JSON.stringify(nextFolders, null, 2));
+            folders = nextFolders;
+            for (const room of Object.values(rooms)) {
+              if (room.folderId === id) delete room.folderId;
+            }
+            saveRooms();
+            json(res, 200, { ok: true });
+            return;
+          }
+          const payload = JSON.parse(body);
+          const name = typeof payload.name === "string" ? payload.name.trim() : "";
+          if (!name || name.length > 64) { json(res, 400, { error: "folder name must be 1–64 characters" }); return; }
+          if (Object.entries(folders).some(([existingId, existingName]) => existingId !== id && existingName.toLowerCase() === name.toLowerCase())) {
+            json(res, 409, { error: "folder name already exists" }); return;
+          }
+          const folderId = id || crypto.randomUUID();
+          const previousFolders = folders;
+          folders = { ...folders, [folderId]: name };
+          try { saveFolders(); } catch (error) { folders = previousFolders; throw error; }
+          json(res, 200, { folder: { id: folderId, name } });
+        } catch (error) {
+          json(res, error instanceof SyntaxError ? 400 : 500, { error: "could not save folder" });
+        }
+      });
+      return;
+    }
+
+    const move = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/folder$/);
+    if (req.method === "POST" && move) {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        try {
+          const payload = JSON.parse(body);
+          const room = rooms[normId(move[1])];
+          if (!room) { json(res, 404, { error: "unknown room" }); return; }
+          if (payload.key !== room.key) { json(res, 403, { error: "wrong key" }); return; }
+          if (payload.folderId !== null && (typeof payload.folderId !== "string" || !Object.hasOwn(folders, payload.folderId))) {
+            json(res, 400, { error: "unknown folder" }); return;
+          }
+          const previousFolderId = room.folderId;
+          if (payload.folderId === null) delete room.folderId; else room.folderId = payload.folderId;
+          try { fs.writeFileSync(ROOMS_FILE, JSON.stringify(rooms, null, 2)); } catch (error) {
+            if (previousFolderId === undefined) delete room.folderId; else room.folderId = previousFolderId;
+            throw error;
+          }
+          json(res, 200, { ok: true });
+        } catch (error) {
+          json(res, error instanceof SyntaxError ? 400 : 500, { error: "could not move room" });
+        }
       });
       return;
     }

@@ -1,57 +1,32 @@
 #!/bin/bash
-# Excalidraw self-hosted on generic Linux — full stack installer
+# Excalidraw self-hosted on SteamOS (Deck) — full stack installer
 # - app + collab room over Caddy HTTPS on :8443 (Tailscale cert, MagicDNS name)
 # - systemd units for boot persistence
-# - reinstall.sh kept in home dir to restore after OS updates
-#
-# Prereqs: podman, tailscale (logged in, MagicDNS enabled), git.
-# FQDN defaults to this host's Tailscale MagicDNS name; override with
-# FQDN=host.tailnet.ts.net when python3 is unavailable for detection.
+# - reinstall.sh kept in home dir to restore after SteamOS updates
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
-if [ -z "${FQDN:-}" ]; then
-  FQDN=$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)
-fi
-[ -z "${FQDN:-}" ] && { echo "ERROR: no MagicDNS name for this host (enable MagicDNS in tailnet admin, install python3, or export FQDN)"; exit 1; }
+FQDN=${FQDN:-$(tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')}
+[ -z "$FQDN" ] && { echo "ERROR: no MagicDNS name for this host (enable MagicDNS in tailnet admin)"; exit 1; }
 echo "== FQDN: $FQDN"
 
-IS_STEAMOS=0
-grep -qiE '^(ID|ID_LIKE)=.*steamos' /etc/os-release 2>/dev/null && IS_STEAMOS=1 || true
-
-if [ "$IS_STEAMOS" = 1 ]; then
-  # SteamOS: /var is a ~230MB partition and overlay fails on /home's FS,
-  # so the podman root store moves to /home with the vfs driver.
-  if ! grep -q 'graphroot = "/home/containers/storage"' /etc/containers/storage.conf 2>/dev/null; then
-    sudo mkdir -p /home/containers/storage
-    sudo tee /etc/containers/storage.conf > /dev/null <<'STO'
+# 0a. podman root store → /home (SteamOS /var is a 230MB partition; images + patched JS need room)
+#     overlay driver fails on /home's FS on this hardware → use vfs
+if ! grep -q 'graphroot = "/home/containers/storage"' /etc/containers/storage.conf 2>/dev/null; then
+  sudo mkdir -p /home/containers/storage
+  sudo tee /etc/containers/storage.conf > /dev/null <<'STO'
 [storage]
   driver = "vfs"
   graphroot = "/home/containers/storage"
   runroot = "/run/containers/storage"
 STO
-    echo "== storage.conf: root store moved to /home/containers/storage (vfs, wipes old overlay state)"
-  fi
+  echo "== storage.conf: root store moved to /home/containers/storage (vfs, wipes old overlay state)"
+fi
 
-  # free the old full store if it still exists
-  if [ -d /var/lib/containers/storage ] && grep -q 'graphroot = "/home/containers/storage"' /etc/containers/storage.conf; then
-    sudo rm -rf /var/lib/containers/storage
-    echo "== freed /var/lib/containers/storage (old store)"
-  fi
-else
-  # Generic Linux: podman defaults are fine unless /var is cramped (<2G free
-  # and no storage.conf yet) — then move just the graphroot to /home,
-  # keeping the default overlay driver.
-  VAR_FREE_MB=$(df --output=avail -m /var 2>/dev/null | tail -1 | tr -dc '0-9')
-  if [ -n "${VAR_FREE_MB:-}" ] && [ "$VAR_FREE_MB" -lt 2048 ] && [ ! -f /etc/containers/storage.conf ]; then
-    sudo mkdir -p /home/containers/storage
-    sudo tee /etc/containers/storage.conf > /dev/null <<'STO'
-[storage]
-  graphroot = "/home/containers/storage"
-  runroot = "/run/containers/storage"
-STO
-    echo "== storage.conf: /var is cramped (${VAR_FREE_MB}M free), root store moved to /home/containers/storage"
-  fi
+# 0b. free the old full store if it still exists
+if [ -d /var/lib/containers/storage ] && grep -q 'graphroot = "/home/containers/storage"' /etc/containers/storage.conf; then
+  sudo rm -rf /var/lib/containers/storage
+  echo "== freed /var/lib/containers/storage (old store)"
 fi
 
 BASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -61,25 +36,20 @@ cd "$BASE"
 [ -f "$BASE/shortcode/server.js" ] || { echo 'Missing shortcode/server.js; use the complete repository.' >&2; exit 1; }
 cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
 
-# 0c. writable rootfs is required for /etc/systemd/system units and
-#     /etc/containers/storage.conf
+# 0c. writable rootfs is required for /etc/systemd/system units and /etc/containers/storage.conf
 if [ "$(findmnt -n -o OPTIONS -T /etc/systemd/system | cut -d, -f1)" = ro ]; then
-  if [ "$IS_STEAMOS" = 1 ]; then
-    echo "run: sudo steamos-readonly disable   (once, before this script)"
-  else
-    echo "ERROR: /etc/systemd/system is not writable (read-only rootfs?)"
-  fi
+  echo "run: sudo steamos-readonly disable   (once, before this script)"
   exit 1
 fi
 
 # 0f. app image is built from ./app (monorepo: the fork lives here as a git
 #     subtree with full history; no clone, no bundle — this script runs from
-#     the repo root, and ~/excalidraw on the host IS this repo's checkout).
+#     the repo root, and ~/excalidraw on the Deck IS this repo's checkout).
 HERE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="excalidraw-selfhost"
 (cd "$HERE/app" && sudo podman build -t "$IMAGE" .)
 
-# 1. tailscale cert for the host's MagicDNS name
+# 1. tailscale cert (as deck user, userspace daemon)
 cd "$BASE/certs"
 tailscale cert "$FQDN"
 chmod a+r "$FQDN".crt "$FQDN".key
@@ -121,8 +91,7 @@ sudo podman run -d --name excalidraw-room --restart always --network host \
 sudo podman run -d --name excalidraw --restart always --network host \
   -e FQDN_HOST="$FQDN" \
   "$IMAGE" \
-  sh -c 'CFG=/etc/nginx/conf.d/default.conf; grep -q excalidraw-cache-policy $CFG || { printf "%s\n" "    # excalidraw-cache-policy" "    location = /index.html {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"no-store\";" "    }" "    location /assets/ {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"public, max-age=31536000, immutable\";" "    }" > /tmp/cachepol.conf; sed -i -e "/server_name  localhost;/r /tmp/cachepol.conf" $CFG; }; nginx -t && \
-    find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\1/" {} + && \
+  sh -c 'find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\1/" {} + && \
     find /usr/share/nginx/html/assets -name "*.js" -exec \
       sed -i -e "s|https://oss-collab\.excalidraw\.com|wss://$FQDN_HOST:8443|g" \
              -e "s|wss://oss-collab\.excalidraw\.com|wss://$FQDN_HOST:8443|g" {} + && \

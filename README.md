@@ -1,18 +1,19 @@
-# Excalidraw self-hosted (generic Linux)
+# Excalidraw self-hosted: Steam Deck + Android tablet + MacBook
 
-Self-hosted collaborative whiteboard. The Excalidraw web app plus its collab
-room server run in **podman containers on a generic Linux host**; all devices
-reach it over the tailnet via HTTPS (Tailscale-issued cert). Room sharing
-supports a **short code** (e.g. `7QU6-38SK`) in addition to the full link; the
-Join-room UI and all new strings ship inside the forked Excalidraw build
-under `app/`.
+Self-hosted collaborative whiteboard. **Excalidraw (app + collab room) runs on a
+Steam Deck** under podman; all devices reach it over the tailnet via HTTPS
+(Tailscale-issued cert). Room sharing supports a **short code** (e.g. `7QU6-38SK`)
+in addition to the full link; the Join-room UI and all new strings ship inside the
+[forked Excalidraw build](https://github.com/knocking4thcylinder/excalidraw-selfhosted-fork).
+
+Draw with a stylus on the Android tablet, mirrored live on any device in the tailnet.
 
 ```mermaid
 %%{init:{"theme":"dark"}}%%
 graph LR
-  T[Tablet/phone browser<br/>or APK wrapper, stylus] -- "tailnet, wss" --> H((Linux host))
-  M[Second device] -- "tailnet" --> H
-  subgraph H [Linux host]
+  T[Android tablet<br/>APK wrapper, stylus] -- "per-app VPN, wss" --> D((Steam Deck))
+  M[MacBook] -- "route fixer + hosts entry" --> D
+  subgraph D [Steam Deck]
     C[Caddy :8443 TLS]
     A[excalidraw-selfhost :3000]
     R[excalidraw-room :3002]
@@ -25,40 +26,31 @@ graph LR
 
 | Path | Purpose |
 |---|---|
-| `install.sh` | Full canonical installer on the host: container storage setup, Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
-| `redeploy.sh` | Fast path after `app/` or packaging changes: `git pull` + rebuild + container swap (run on the host from `~/excalidraw`) |
-| `shortcode/server.js` | Tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes) |
-| `app/` | Forked Excalidraw source (git subtree, full history — `git log -- app`), built into the `excalidraw-selfhost` image on the host |
-| `mac/` | Optional: Mac client route fixer (LaunchDaemon + `/etc/hosts`) for tailnets reached through proxy/TUN apps |
-| `android/` | Optional: reproducible no-gradle APK build (fullscreen WebView wrapper, minSdk 21), VIEW-intent for room links |
+| `install.sh` | **Deck**: full canonical installer — storage (vfs on `/home`), Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
+| `shortcode/server.js` | tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes) |
+| `mac/install-mac.sh` | Mac: installs the LaunchDaemon route fixer + `/etc/hosts` entry (interactive prompt for the Deck FQDN / tailnet IP) |
+| `mac/fix_ts_routes.sh` | asserts a `/32` route per tailnet peer every 20 s (beats proxy/TUN apps like Happ) |
+| `mac/com.fixtsroutes.plist` | LaunchDaemon definition (`user.fixtsroutes`) |
+| `android/build.sh` | reproducible APK build: fetches Google `cmdline-tools` on first run, compiles with `aapt2`/`javac`/`d8`, signs with a locally generated keystore |
+| `android/app/...` | fullscreen WebView (minSdk 21 — HarmonyOS 2.0 works), INTERNET only, keeps screen on, VIEW-intent for room links, remembers last URL |
 
 ## URLs
 
 | From | URL |
 |---|---|
-| Anywhere on the tailnet | `https://<your-host-magicdns>:8443` |
+| Anywhere on the tailnet | `https://steamdeck.example.ts.net:8443` |
 | Room share | full link *or* short code — created via **Live Collaboration → Start session**, code shown in the dialog |
 
-## Setup
-
-Prereqs on the host: `podman`, `tailscale` (logged in, MagicDNS enabled),
-`git` (`python3` for automatic FQDN detection, otherwise export `FQDN`).
+## Setup, one command per device
 
 ```bash
-# on the host, from a checkout of this repo (e.g. ~/excalidraw):
+# Deck (once: sudo steamos-readonly disable)
 ./install.sh
 
-# after app/packaging changes (on the host):
-bash ~/excalidraw/redeploy.sh
-```
-
-Optional clients:
-
-```bash
-# Mac route fixes (needs sudo)
+# Mac (needs sudo)
 sudo ./mac/install-mac.sh
 
-# Android APK
+# Android
 cd android && ./build.sh
 adb install -r build/Excalidraw.apk
 ```
@@ -68,6 +60,9 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
 
 ## Reproduction notes (things that cost us hours — don't re-learn them)
 
+- **SteamOS `/var` is a 230 MB partition** — podman's root store must live on `/home`;
+  the `overlay` driver fails on `/home`'s FS here → installer sets **vfs** on
+  `/home/containers/storage` and frees the old `/var/lib/containers` store
 - **`crypto.subtle` needs a secure origin** — plain-IP `http://` silently breaks
   "Start session" (no exception surfaces); hence HTTPS everywhere
 - **Excalidraw's collab URL is baked into the built JS bundle** — the installer
@@ -75,43 +70,45 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
   `oss-collab.excalidraw.com` references before starting nginx
 - **Service worker removed in the fork** (Workbox/PWA plugin disabled): redeploys
   now reach clients as plain network loads — no unregister/hard-reload dance.
-  Trade-off: no offline cached app shell — acceptable for tailnet use.
-  `index.html` is served `no-store`, hashed assets `immutable`
+  Trade-off: no offline cached app shell — acceptable for tailnet use
 - **Caddy path matchers**: `/api/code/*` does not match a bare `/api/code` request —
-  hence the `*` without slash in the Caddyfile
+  hence the `*` without slash in this repo's Caddyfile
 - **Single-file bind mounts**: `sed -i` inside the Caddy container fails with
   "Resource busy" (temp-file rename); edit the host file and restart the container
-- **Run duplicate-free**: two container runtimes (e.g. root + rootless podman)
-  share host networking — a second `excalidraw-room` will steal `:3002` and
-  crash-loop the canonical one. Always use the same podman (this repo: `sudo podman`)
+- **proxy/TUN apps on the Mac (Happ etc.)** hijack `100.64/10` and DNS — the
+  per-peer `/32` route daemon + hosts entry neutralize both
 - Rooms are E2E-encrypted; the short-code map trades a bit of that
   (it stores room keys server-side) for shorter links — delete
   `shortcode-data/codes.json` at any time to revoke
 
-## Offline use (tablet without network)
+## Repo layout (monorepo)
 
-The app shell is precached by a service worker, so rooms open with no
-network. Draw freely — work persists on the device. Offline is silent: no
-banner, no prompts; the client rejoins in the background (poll + socket
-events, not just `navigator.onLine`) and merges offline strokes with the
-server snapshot (union, versioned), then saves back; history keeps prior
-snapshots, and empty states never overwrite good ones (409 + client guards).
-Rooms created offline register themselves on first connect. Every edit also
-lands in a room-scoped device backup, and server snapshots save every ~5s,
-so a crash loses seconds at most. Collab itself needs connectivity; offline
-means solo drawing with later merge (last-writer-wins per element on
-conflict).
+This repo is the whole project: packaging (`install.sh`, `shortcode/`,
+`mac/`, `android/`) plus the app source under `app/` (the former
+`excalidraw-selfhosted-fork`, merged as a git subtree with full history —
+see `git log -- app`). `~/excalidraw` on the Deck IS this repo's checkout
+(branch `master`); runtime files (`shortcode-data/`, `certs/`, `Caddyfile`,
+`shortcode-server.js`) live next to it, gitignored, never committed.
 
-## Updating the app
-
-Commit under `app/` (or packaging), push `master`, then on the host:
+Pulling upstream Excalidraw into `app/` later:
 
 ```bash
-cd ~/excalidraw && ./deploy.sh   # git pull + rebuild + swap + verified HTTPS checks
+git subtree pull --prefix=app https://github.com/excalidraw/excalidraw.git <tag-or-main> --squash
 ```
 
-No bundles: the host updates via `git pull` (needs one read credential for
-this private repo), falling back to files synced from another machine.
+(`--squash` keeps upstream history out of our log; drop it to keep full
+history. The old `excalidraw-selfhosted-fork` remote is frozen/archive.)
+
+## Updating the app on the Deck
+
+Commit under `app/` (or packaging), push `master`, then on the Deck:
+
+```bash
+cd ~/excalidraw && ./deploy.sh   # git pull (when a checkout) + rebuild + swap + HTTPS checks
+```
+
+No bundles: the Deck updates via `git pull` (needs one read credential for
+this private repo), falling back to files synced from the Mac.
 
 ## Server recovery and diagnostics
 
@@ -128,36 +125,39 @@ sudo systemctl status excalidraw-deploy           # deployment result and recent
 
 The stack service is a coordinator (`active (exited)` is normal); each component
 has its own continuously supervised service. Deployment is on-demand only,
-not run on every boot.
+not run on every boot. In a synced directory without `.git`, it builds local files.
 
 ```bash
 ./deploy.sh start   # restore boot services and start existing containers; no rebuild
 ./deploy.sh status  # container/service state and verified HTTPS app, room, API checks
 ./deploy.sh logs    # recent logs for all four services
-./deploy.sh build   # build only the app image
 ```
 
-Use `https://<your-host-magicdns>:8443` on the tablet with Tailscale connected.
-Port 443 may serve another application. If the app works locally but the tablet
-cannot connect, check the HTTPS proxy with `status`; `start` repairs missing
-systemd units, including Caddy, so the stack starts after reboot. It also renews
-the TLS certificate when it has less than seven days remaining and installs
-a daily certificate-renewal timer.
+Always use `https://steamdeck.example.ts.net:8443` on the tablet with
+Tailscale connected. Port 443 may serve another application. If the app works
+locally but the tablet cannot connect, check the HTTPS proxy with `status`;
+`start` repairs missing systemd units, including the Caddy unit, so the stack
+starts after reboot. It also renews the TLS certificate when it has less than
+seven days remaining, and installs a daily certificate-renewal timer.
 
 Legacy `deck-redeploy-fork.sh`, `redeploy-fork.sh`, and `run-https.sh` commands
-forward to the same helper instead of maintaining separate container settings.
-Deployment preserves `shortcode-data/` and prevents concurrent deployments.
+now forward to the same deployment helper instead of maintaining separate,
+outdated container configurations. `./deploy.sh build` builds only the app image.
 
 A synced directory without `.git` does **not** download GitHub updates: deploying
 builds its local files and prints a warning. Use a real checkout of
 `knocking4thcylinder/excalidraw-selfhosted` for automatic `git pull` updates.
+Deployment preserves `shortcode-data/` and prevents concurrent deployments.
 
-## Platform quirks
+### Room folders
 
-- **SteamOS**: `/var` is a ~230 MB partition, so the installer moves podman's
-  root store to `/home/containers/storage` with the `vfs` driver (overlay fails
-  on that FS); needs `sudo steamos-readonly disable` once. Use
-  `reinstall.sh` (re-runs `install.sh`) after SteamOS updates.
-- **Small `/var` on other distros**: if under ~2 GB free and no
-  `storage.conf` exists yet, the installer moves just the graphroot to
-  `/home/containers/storage`, keeping the default driver.
+In **My rooms**, use **New folder** to create a folder, then use the selector
+on each room to move it into a folder or back to **Unfiled**. The **Folders**
+selector filters the room list; room search applies within the selected folder.
+Select a folder to rename or delete it. Deleting a folder keeps its rooms and
+their drawings, moving them to **Unfiled**.
+
+Folders are shared across clients of this self-hosted instance, like the room
+registry, and persist in `shortcode-data/folders.json`. The service supports a
+`FOLDERS_FILE` override; by default it stores folders alongside `ROOMS_FILE`.
+Deploy both the app and shortcode service to enable folder management.
