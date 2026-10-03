@@ -10,3 +10,4 @@ fork/
 .build-cache/
 .backend-engine
 .scene-sync-enabled
+/AGENTS.md
