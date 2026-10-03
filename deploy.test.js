@@ -11,7 +11,7 @@ function fixture(context) {
   context.after(() => rmSync(directory, { recursive: true, force: true }));
   const bin = path.join(directory, ".local/bin");
   mkdirSync(bin, { recursive: true });
-  for (const name of ["app", "shortcode", "shortcode-data", "units"]) {
+  for (const name of ["app", "backend", "shortcode", "shortcode-data", "units"]) {
     mkdirSync(path.join(directory, name));
   }
   for (const name of ["deploy.sh", "redeploy.sh"]) {
@@ -34,6 +34,10 @@ if (command === "sudo") [command, ...args] = args;
 fs.appendFileSync(process.env.MOCK_LOG, JSON.stringify([command, ...args]) + "\\n");
 if (command === "podman" && args[0] === "info") console.log(args.includes("{{.Store.GraphDriverName}}") ? "vfs" : process.env.HOME);
 if (command === "podman" && args[0] === "build" && process.env.MOCK_FAIL_BUILD) process.exit(1);
+if (command === "curl" && process.env.MOCK_FAIL_CHECK) {
+  if (process.env.MOCK_NEW_DATABASE) fs.writeFileSync(path.join(process.env.HOME, "shortcode-data/whiteboard.sqlite3"), "imported database");
+  process.exit(1);
+}
 if (command === "podman" && args[0] === "container" && process.env.MOCK_MISSING_CONTAINER) process.exit(1);
 if (command === "systemctl" && args[0] === "cat" && process.env.MOCK_MISSING_UNITS) process.exit(1);
 if (command === "df") console.log("Filesystem 1024-blocks Used Available Capacity Mounted on\\nmock 999999999 0 " + (process.env.MOCK_FREE_KB || "999999999") + " 1% /mock");
@@ -287,4 +291,81 @@ test("runtime image uses the same pinned nginx base as the multi-stage build", (
   const nginxBase = dockerfile.split("\n").find((line) => line.startsWith("FROM nginx:"));
   assert.ok(runtime.startsWith(nginxBase));
   assert.ok(runtime.includes("COPY build/ /usr/share/nginx/html"));
+});
+
+test("Elixir backend opt-in builds before stopping, backs up data and retains selection", (context) => {
+  const setup = fixture(context);
+  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir" });
+  assert.equal(result.status, 0, result.stderr);
+  const commands = setup.commands();
+  const buildIndex = commands.findIndex((command) => command[0] === "podman" && command[1] === "build");
+  const stopIndex = commands.findIndex((command) => command[0] === "systemctl" && command[1] === "stop");
+  assert.ok(buildIndex >= 0 && buildIndex < stopIndex);
+  assert.ok(includesCommand(commands, "cp", "-a", path.join(setup.directory, "shortcode-data")));
+  const created = commands.find((command) => command[0] === "podman" && command[1] === "create");
+  assert.ok(created.includes("excalidraw-api-elixir"));
+  assert.ok(created.includes("LEGACY_DATA_DIR=/data"));
+  assert.ok(created.includes("SCENE_SYNC_ENABLED=false"));
+  assert.ok(!created.includes("docker.io/library/node:20-alpine"));
+  assert.equal(readFileSync(path.join(setup.directory, ".backend-engine"), "utf8"), "elixir\n");
+  assert.equal(readFileSync(path.join(setup.directory, "shortcode-data/codes.json"), "utf8"), "persisted data\n");
+  assert.equal(setup.run(["backend", "--local"]).status, 0);
+  assert.equal(setup.commands().filter((command) => command[0] === "podman" && command[1] === "build").length, 2);
+});
+
+test("failed Elixir build leaves the old service and engine selection untouched", (context) => {
+  const setup = fixture(context);
+  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir", MOCK_FAIL_BUILD: "1" });
+  assert.notEqual(result.status, 0);
+  assert.ok(!includesCommand(setup.commands(), "systemctl", "stop"));
+  assert.ok(!includesCommand(setup.commands(), "podman", "rm"));
+  assert.ok(!existsSync(path.join(setup.directory, ".backend-engine")));
+});
+
+test("scene sync opt-in persists across successful backend deployments", (context) => {
+  const setup = fixture(context);
+  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir", SCENE_SYNC_ENABLED: "true" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(path.join(setup.directory, ".scene-sync-enabled"), "utf8"), "true\n");
+  assert.equal(setup.run(["backend", "--local"]).status, 0);
+  const creates = setup.commands().filter((command) => command[0] === "podman" && command[1] === "create");
+  assert.ok(creates.every((command) => command.includes("SCENE_SYNC_ENABLED=true")));
+});
+
+test("scene sync validation runs before changing services", (context) => {
+  const setup = fixture(context);
+  const result = setup.run(["backend", "--local"], { SCENE_SYNC_ENABLED: "invalid" });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /SCENE_SYNC_ENABLED must be/);
+  assert.deepEqual(setup.commands(), []);
+});
+
+test("backend engine validation runs before changing services", (context) => {
+  const setup = fixture(context);
+  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "invalid" });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /BACKEND_ENGINE must be/);
+  assert.deepEqual(setup.commands(), []);
+});
+
+test("explicit Node selection overrides a remembered Elixir selection", (context) => {
+  const setup = fixture(context);
+  writeFileSync(path.join(setup.directory, ".backend-engine"), "elixir\n");
+  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "node" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!includesCommand(setup.commands(), "podman", "build"));
+  assert.equal(readFileSync(path.join(setup.directory, ".backend-engine"), "utf8"), "node\n");
+});
+
+test("failed Elixir health check restores the previous backend container", (context) => {
+  const setup = fixture(context);
+  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir", MOCK_FAIL_CHECK: "1", MOCK_NEW_DATABASE: "1" });
+  assert.notEqual(result.status, 0);
+  const renames = setup.commands().filter((command) => command[0] === "podman" && command[1] === "rename");
+  assert.equal(renames.length, 2);
+  assert.equal(renames[0][2], "excalidraw-shortcode");
+  assert.equal(renames[1][2], renames[0][3]);
+  assert.equal(renames[1][3], "excalidraw-shortcode");
+  assert.ok(includesCommand(setup.commands(), "mv", path.join(setup.directory, "shortcode-data/whiteboard.sqlite3")));
+  assert.ok(!existsSync(path.join(setup.directory, ".backend-engine")));
 });

@@ -68,11 +68,11 @@ class Portal {
   }
 
   close() {
-    if (!this.socket) {
-      return;
+    if (this.socket) {
+      this.queueFileUpload.flush();
+      this.socket.close();
     }
-    this.queueFileUpload.flush();
-    this.socket.close();
+    this.queueFileUpload.cancel();
     this.socket = null;
     this.roomId = null;
     this.roomKey = null;

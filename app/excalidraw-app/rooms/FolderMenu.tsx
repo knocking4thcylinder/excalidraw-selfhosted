@@ -3,6 +3,7 @@ import { DropdownMenu } from "radix-ui";
 import {
   checkIcon,
   chevronDownIcon,
+  LoadIcon,
 } from "@excalidraw/excalidraw/components/icons";
 
 export const FolderMenu = ({
@@ -27,10 +28,11 @@ export const FolderMenu = ({
         compact ? " RoomsPage__select--move" : ""
       }`}
       aria-label={label}
+      title={label}
       disabled={disabled}
     >
       <span>{options.find((option) => option.value === value)?.label}</span>
-      {chevronDownIcon}
+      {compact ? LoadIcon : chevronDownIcon}
     </DropdownMenu.Trigger>
     <DropdownMenu.Content
       className="RoomsPage__folderMenu"

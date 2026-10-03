@@ -21,6 +21,8 @@ Object.defineProperty(window, "crypto", {
     getRandomValues: (arr: number[]) =>
       arr.forEach((v, i) => (arr[i] = Math.floor(Math.random() * 256))),
     subtle: {
+      importKey: async () => ({}),
+      encrypt: async () => new ArrayBuffer(0),
       generateKey: () => {},
       exportKey: () => ({ k: "sTdLvMC_M3V8_vGa3UVRDg" }),
     },

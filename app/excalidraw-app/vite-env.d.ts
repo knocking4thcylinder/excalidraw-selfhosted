@@ -2,6 +2,7 @@
 /// <reference types="vite-plugin-pwa/info" />
 /// <reference types="vite-plugin-svgr/client" />
 interface ImportMetaEnv {
+  VITE_APP_LOADING_BENCHMARK?: string;
   // The port to run the dev server
   VITE_APP_PORT: string;
 

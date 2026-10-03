@@ -6,7 +6,11 @@ import { useI18n } from "@excalidraw/excalidraw/i18n";
 
 import { isExcalidrawPlusSignedUser } from "../app_constants";
 import { useAtomValue } from "../app-jotai";
-import { isOfflineAtom, offlineRoomPendingAtom } from "../collab/Collab";
+import {
+  isOfflineAtom,
+  offlineRoomPendingAtom,
+  roomValidationPendingAtom,
+} from "../collab/Collab";
 
 import { DebugFooter, isVisualDebuggerEnabled } from "./DebugCanvas";
 import { EncryptedIcon } from "./EncryptedIcon";
@@ -22,6 +26,7 @@ export const AppFooter = React.memo(
     const { t } = useI18n();
     const isOffline = useAtomValue(isOfflineAtom);
     const pendingRoom = useAtomValue(offlineRoomPendingAtom);
+    const validatingRoom = useAtomValue(roomValidationPendingAtom);
     return (
       <Footer>
         <div
@@ -32,9 +37,13 @@ export const AppFooter = React.memo(
           }}
         >
           {isVisualDebuggerEnabled() && <DebugFooter onChange={onChange} />}
-          {(isOffline || pendingRoom) && (
+          {(isOffline || pendingRoom || validatingRoom) && (
             <span className="room-connection-status" role="status">
-              {t("myRooms.offline")}
+              {t(
+                isOffline || pendingRoom
+                  ? "myRooms.offline"
+                  : "myRooms.checking",
+              )}
             </span>
           )}
           {onRoomsOpen && (

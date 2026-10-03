@@ -80,6 +80,7 @@ import type { ResolutionType } from "@excalidraw/common/utility-types";
 import type { ResolvablePromise } from "@excalidraw/common/utils";
 
 import CustomStats from "./CustomStats";
+import { attachLoadingBenchmark } from "./loadingBenchmark";
 import {
   Provider,
   useAtom,
@@ -131,8 +132,7 @@ import {
 } from "./data/LocalData";
 import { isBrowserStorageStateNewer } from "./data/tabSync";
 import { ShareDialog, shareDialogStateAtom } from "./share/ShareDialog";
-import { RoomsPage } from "./rooms/RoomsPage";
-import { isRoomsHash, openRoomsPage } from "./rooms/roomsRoute";
+import { closeRoomsPage, isRoomsHash } from "./rooms/roomsRoute";
 import CollabError, { collabErrorIndicatorAtom } from "./collab/CollabError";
 import { useHandleAppTheme } from "./useHandleAppTheme";
 import { getPreferredLanguage } from "./app-language/language-detector";
@@ -397,6 +397,7 @@ const ExcalidrawWrapper = () => {
   }
 
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
+  const benchmarkCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
@@ -413,23 +414,23 @@ const ExcalidrawWrapper = () => {
   });
   const collabError = useAtomValue(collabErrorIndicatorAtom);
   const userToFollow = useAtomValue(userToFollowAtom);
-  const activeRoomLink = useAtomValue(activeRoomLinkAtom);
-
-  // The rooms sidebar route keeps the canvas and collaboration mounted.
-  const [isRoomsRoute, setIsRoomsRoute] = useState(() =>
-    isRoomsHash(window.location.hash),
-  );
-  const [roomsSidebarCollapsed, setRoomsSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     const syncRoomsRoute = () => {
-      setIsRoomsRoute(isRoomsHash(window.location.hash));
+      if (isRoomsHash(window.location.hash)) {
+        excalidrawAPI?.toggleSidebar({
+          name: "default",
+          tab: "rooms",
+          force: true,
+        });
+      }
     };
+    syncRoomsRoute();
     window.addEventListener(EVENT.HASHCHANGE, syncRoomsRoute, false);
     return () => {
       window.removeEventListener(EVENT.HASHCHANGE, syncRoomsRoute, false);
     };
-  }, []);
+  }, [excalidrawAPI]);
 
   const viewportStatusFrame = useMemo(
     () =>
@@ -604,8 +605,9 @@ const ExcalidrawWrapper = () => {
           // Same-room navigation (e.g. closing the Rooms page back onto the
           // active room) must not tear down and reconnect the live session.
           const target = getCollaborationLinkData(window.location.href);
-          const active = activeRoomLink
-            ? getCollaborationLinkData(activeRoomLink)
+          const activeLink = appJotaiStore.get(activeRoomLinkAtom);
+          const active = activeLink
+            ? getCollaborationLinkData(activeLink)
             : null;
           if (
             target &&
@@ -629,10 +631,21 @@ const ExcalidrawWrapper = () => {
         initializeScene({ collabAPI, excalidrawAPI }).then((data) => {
           loadImages(data);
           if (data.scene) {
+            const currentElements =
+              excalidrawAPI.getSceneElementsIncludingDeleted();
+            const alreadyInstalled =
+              data.scene.elements?.length === currentElements.length &&
+              data.scene.elements.every(
+                (element, index) => element === currentElements[index],
+              );
             excalidrawAPI.updateScene({
-              elements: restoreElements(data.scene.elements, null, {
-                repairBindings: true,
-              }),
+              ...(alreadyInstalled
+                ? {}
+                : {
+                    elements: restoreElements(data.scene.elements, null, {
+                      repairBindings: true,
+                    }),
+                  }),
               appState: restoreAppState(data.scene.appState, null),
               captureUpdate: CaptureUpdateAction.IMMEDIATELY,
             });
@@ -738,14 +751,7 @@ const ExcalidrawWrapper = () => {
         false,
       );
     };
-  }, [
-    isCollabDisabled,
-    collabAPI,
-    excalidrawAPI,
-    setLangCode,
-    loadImages,
-    activeRoomLink,
-  ]);
+  }, [isCollabDisabled, collabAPI, excalidrawAPI, setLangCode, loadImages]);
 
   useEffect(() => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
@@ -889,17 +895,26 @@ const ExcalidrawWrapper = () => {
   );
 
   const onRoomsOpen = useCallback(() => {
-    openRoomsPage(window);
-    // openRoomsPage assigns location.hash (fires hashchange → route effect
-    // hides/shows the page), but when already on the route no event fires.
-    setIsRoomsRoute(true);
-  }, []);
+    excalidrawAPI?.toggleSidebar({
+      name: "default",
+      tab: "rooms",
+      force: true,
+    });
+  }, [excalidrawAPI]);
 
-  // RoomsPage calls this after it already navigated (or deliberately didn't):
-  // just resync visibility with the actual hash.
   const onRoomsClose = useCallback(() => {
-    setIsRoomsRoute(isRoomsHash(window.location.hash));
-  }, []);
+    excalidrawAPI?.toggleSidebar({ name: "default", force: false });
+    closeRoomsPage(window);
+  }, [excalidrawAPI]);
+
+  const onRoomsSidebarChange = useCallback(
+    (sidebar: AppState["openSidebar"]) => {
+      if (sidebar?.tab !== "rooms") {
+        closeRoomsPage(window);
+      }
+    },
+    [],
+  );
 
   // ---------------------------------------------------------------------------
   // onExport — intercepts file save to wait for pending image loads
@@ -1014,11 +1029,27 @@ const ExcalidrawWrapper = () => {
       style={{ height: "100%" }}
       className={clsx("excalidraw-app", {
         "is-collaborating": isCollaborating,
-        "rooms-sidebar-open": isRoomsRoute,
-        "rooms-sidebar-collapsed": isRoomsRoute && roomsSidebarCollapsed,
       })}
     >
       <Excalidraw
+        onMount={
+          import.meta.env.VITE_APP_LOADING_BENCHMARK === "true"
+            ? ({ excalidrawAPI, container }) => {
+                const ownerWindow = container?.ownerDocument.defaultView;
+                if (ownerWindow) {
+                  benchmarkCleanupRef.current = attachLoadingBenchmark(
+                    excalidrawAPI,
+                    ownerWindow,
+                  );
+                }
+              }
+            : undefined
+        }
+        onUnmount={
+          import.meta.env.VITE_APP_LOADING_BENCHMARK === "true"
+            ? () => benchmarkCleanupRef.current?.()
+            : undefined
+        }
         viewportStatusFrame={viewportStatusFrame}
         userToFollow={userToFollow}
         onChange={onChange}
@@ -1174,16 +1205,12 @@ const ExcalidrawWrapper = () => {
           }}
         />
 
-        {isRoomsRoute && (
-          <RoomsPage
-            collabAPI={collabAPI}
-            excalidrawAPI={excalidrawAPI}
-            onClose={onRoomsClose}
-            onCollapseChange={setRoomsSidebarCollapsed}
-          />
-        )}
-
-        <AppSidebar />
+        <AppSidebar
+          collabAPI={collabAPI}
+          excalidrawAPI={excalidrawAPI}
+          onClose={onRoomsClose}
+          onStateChange={onRoomsSidebarChange}
+        />
 
         {errorMessage && (
           <ErrorDialog onClose={() => setErrorMessage("")}>

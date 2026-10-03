@@ -5,6 +5,13 @@
 const http = require("http");
 const fs = require("fs");
 const crypto = require("crypto");
+const snapshotEtags = new WeakMap();
+const sceneEtag = (snapshot) => {
+  if (!snapshotEtags.has(snapshot)) {
+    snapshotEtags.set(snapshot, `"${crypto.createHash("sha256").update(snapshot.iv).update(snapshot.ciphertext).digest("hex")}"`);
+  }
+  return snapshotEtags.get(snapshot);
+};
 
 const PORT = process.env.PORT || 3003;
 const FILE = process.env.CODES_FILE || "/data/codes.json";
@@ -39,14 +46,21 @@ const saveScenes = () => {
 // and chunked JSON bodies stall some proxied browsers on this tailnet
 // (incident 2026-09-11: 3.8 MB scene snapshot never completed in-page while
 // curl received it fine; small chunked bodies squeaked through).
-const json = (res, status, obj) => {
+const json = (res, status, obj, headers = {}) => {
   const body = JSON.stringify(obj);
   res.writeHead(status, {
     "content-type": "application/json",
     "cache-control": "no-store",
     "content-length": Buffer.byteLength(body),
+    ...headers,
   });
   res.end(body);
+};
+
+const readBody = (req, handler) => {
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", () => handler(body));
 };
 
 // purely-alphanumeric ids are case-normalized; keys are case-sensitive, never normalized
@@ -66,9 +80,7 @@ http
     const u = new URL(req.url, "http://x");
 
     if (req.method === "POST" && u.pathname === "/api/code") {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
+      readBody(req, (body) => {
         try {
           const { url } = JSON.parse(body);
           const m = (url || "").match(/#room=([A-Za-z0-9_-]+),([A-Za-z0-9_-]+)/);
@@ -118,9 +130,7 @@ http
     }
 
     if (req.method === "POST" && u.pathname === "/api/rooms") {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
+      readBody(req, (body) => {
         let p = {};
         try { p = JSON.parse(body); } catch {}
         const { roomId, roomKey } = p;
@@ -167,9 +177,7 @@ http
 
     const folderRoute = u.pathname.match(/^\/api\/rooms\/folders(?:\/([A-Za-z0-9_-]{1,64}))?$/);
     if (folderRoute && (req.method === "POST" || req.method === "DELETE")) {
-      let body = "";
-      req.on("data", (chunk) => (body += chunk));
-      req.on("end", () => {
+      readBody(req, (body) => {
         try {
           const id = folderRoute[1];
           if (id && !Object.hasOwn(folders, id)) { json(res, 404, { error: "unknown folder" }); return; }
@@ -229,9 +237,7 @@ http
 
     const move = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/folder$/);
     if (req.method === "POST" && move) {
-      let body = "";
-      req.on("data", (chunk) => (body += chunk));
-      req.on("end", () => {
+      readBody(req, (body) => {
         try {
           const payload = JSON.parse(body);
           const room = rooms[normId(move[1])];
@@ -256,9 +262,7 @@ http
 
     const rn = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/rename$/);
     if (req.method === "POST" && rn) {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
+      readBody(req, (body) => {
         let p = {};
         try { p = JSON.parse(body); } catch {}
         const id = normId(rn[1]);
@@ -277,9 +281,7 @@ http
 
     const del = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})$/);
     if (req.method === "DELETE" && del) {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
+      readBody(req, (body) => {
         let p = {};
         try { p = JSON.parse(body); } catch {}
         const id = normId(del[1]);
@@ -321,6 +323,7 @@ const snapOf = (s) => ({
   version: s.version ?? null,
   updatedAt: s.updatedAt,
   isEmpty: s.isEmpty === true,
+  ...(s.patches?.length ? { patches: s.patches } : {}),
 });
 
     const hs = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/scene-history$/);
@@ -339,7 +342,7 @@ const snapOf = (s) => ({
     }
 
     const sm = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/scene$/);
-    if (req.method === "GET" && sm) {
+    if ((req.method === "GET" || req.method === "HEAD") && sm) {
       const id = normId(sm[1]);
       const room = rooms[id];
       if (!room) { json(res, 404, { error: "unknown room" }); return; }
@@ -351,9 +354,21 @@ const snapOf = (s) => ({
       const slot = Number(u.searchParams.get("slot") || 0);
       const pick = slot === 0 ? s : (s.history || [])[slot - 1];
       if (!pick) { json(res, 404, { error: "no such slot" }); return; }
+      if (req.method === "HEAD") {
+        res.writeHead(200, { "cache-control": "no-store", "etag": sceneEtag(pick) });
+        res.end();
+        return;
+      }
+      if (pick.patches?.length) { json(res, 409, { error: "scene sync client and backend required" }); return; }
       const out = snapOf(pick);
+      const etag = sceneEtag(pick);
+      if (req.headers["if-none-match"] === etag) {
+        res.writeHead(304, { "etag": etag, "cache-control": "no-store" });
+        res.end();
+        return;
+      }
       audit(req, `GET scene ${id} slot=${slot} v=${out.version} -> 200`);
-      json(res, 200, { iv: out.iv, ciphertext: out.ciphertext, version: out.version, updatedAt: out.updatedAt });
+      json(res, 200, { iv: out.iv, ciphertext: out.ciphertext, version: out.version, updatedAt: out.updatedAt }, { etag });
       return;
     }
 
@@ -384,6 +399,7 @@ const snapOf = (s) => ({
           return;
         }
         const prev = scenes[id];
+        if (prev?.patches?.length) { json(res, 409, { error: "scene sync backend required" }); return; }
         const declaresEmpty = p.isEmpty === true;
         const declaresNonEmpty = p.isEmpty === false;
         const incomingVersion =

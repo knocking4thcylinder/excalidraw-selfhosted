@@ -24,22 +24,22 @@ graph LR
 
 ## Layout of this repo
 
-| Path | Purpose |
-|---|---|
-| `install.sh` | **Deck**: full canonical installer — storage (vfs on `/home`), Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
-| `shortcode/server.js` | tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes) |
-| `mac/install-mac.sh` | Mac: installs the LaunchDaemon route fixer + `/etc/hosts` entry (interactive prompt for the Deck FQDN / tailnet IP) |
-| `mac/fix_ts_routes.sh` | asserts a `/32` route per tailnet peer every 20 s (beats proxy/TUN apps like Happ) |
-| `mac/com.fixtsroutes.plist` | LaunchDaemon definition (`user.fixtsroutes`) |
-| `android/build.sh` | reproducible APK build: fetches Google `cmdline-tools` on first run, compiles with `aapt2`/`javac`/`d8`, signs with a locally generated keystore |
-| `android/app/...` | fullscreen WebView (minSdk 21 — HarmonyOS 2.0 works), INTERNET only, keeps screen on, VIEW-intent for room links, remembers last URL |
+| Path                        | Purpose                                                                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `install.sh`                | **Deck**: full canonical installer — storage (vfs on `/home`), Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
+| `shortcode/server.js`       | tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes)                            |
+| `mac/install-mac.sh`        | Mac: installs the LaunchDaemon route fixer + `/etc/hosts` entry (interactive prompt for the Deck FQDN / tailnet IP)                                                                          |
+| `mac/fix_ts_routes.sh`      | asserts a `/32` route per tailnet peer every 20 s (beats proxy/TUN apps like Happ)                                                                                                           |
+| `mac/com.fixtsroutes.plist` | LaunchDaemon definition (`user.fixtsroutes`)                                                                                                                                                 |
+| `android/build.sh`          | reproducible APK build: fetches Google `cmdline-tools` on first run, compiles with `aapt2`/`javac`/`d8`, signs with a locally generated keystore                                             |
+| `android/app/...`           | fullscreen WebView (minSdk 21 — HarmonyOS 2.0 works), INTERNET only, keeps screen on, VIEW-intent for room links, remembers last URL                                                         |
 
 ## URLs
 
-| From | URL |
-|---|---|
-| Anywhere on the tailnet | `https://steamdeck.example.ts.net:8443` |
-| Room share | full link *or* short code — created via **Live Collaboration → Start session**, code shown in the dialog |
+| From                    | URL                                                                                                      |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| Anywhere on the tailnet | `https://steamdeck.example.ts.net:8443`                                                               |
+| Room share              | full link _or_ short code — created via **Live Collaboration → Start session**, code shown in the dialog |
 
 ## Setup, one command per device
 
@@ -66,11 +66,12 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
 - **`crypto.subtle` needs a secure origin** — plain-IP `http://` silently breaks
   "Start session" (no exception surfaces); hence HTTPS everywhere
 - **Excalidraw's collab URL is baked into the built JS bundle** — the installer
-  patches it to `wss://<fqdn>:8443` and verifies by grepping for *zero* remaining
+  patches it to `wss://<fqdn>:8443` and verifies by grepping for _zero_ remaining
   `oss-collab.excalidraw.com` references before starting nginx
-- **Service worker removed in the fork** (Workbox/PWA plugin disabled): redeploys
-  now reach clients as plain network loads — no unregister/hard-reload dance.
-  Trade-off: no offline cached app shell — acceptable for tailnet use
+- **Offline app shell**: the source build enables Workbox/PWA precaching, with
+  runtime caches for fonts, locales and lazy chunks. A browser must load/cache
+  those resources before it can launch offline; room-data caching alone does
+  not make a first-ever visit work without the server
 - **Caddy path matchers**: `/api/code/*` does not match a bare `/api/code` request —
   hence the `*` without slash in this repo's Caddyfile
 - **Single-file bind mounts**: `sed -i` inside the Caddy container fails with
@@ -114,7 +115,7 @@ For smaller updates, deploy only the affected component:
 
 ```bash
 ./deploy.sh app       # build/swap frontend only; leave backend and proxy running
-./deploy.sh backend   # update shortcode/server.js only; no frontend build
+./deploy.sh backend   # update the selected API backend; no frontend build
 ./deploy.sh full      # default: frontend + shortcode backend + proxy routes
 ./deploy.sh app --local  # deploy working-tree files without git pull
 ```
@@ -123,6 +124,11 @@ Selective modes still pull the whole checkout unless `--local` is passed, but
 only deploy the selected component. Use `full` for changes spanning components
 or proxy routes. `backend` updates the shortcode/rooms API, not the external
 `excalidraw-room` collaboration image or the standalone root `server.js`.
+The default API backend remains Node. Opt in to the compatible Phoenix/SQLite
+backend with `BACKEND_ENGINE=elixir ./deploy.sh backend --local`; subsequent
+deployments retain the selection. See `backend/README.md` for preview, JSON
+import, backups, and rollback precautions. This does not yet implement
+local-first frontend loading or incremental scene transfers.
 Each deployment prints stage timings, including dependency and frontend builds.
 On Podman's `vfs` driver, builds automatically use a reusable, pinned Node
 container with a host-mounted `.build-cache/` workspace. Source files are synced
@@ -194,23 +200,81 @@ Deployment preserves `shortcode-data/` and prevents concurrent deployments.
 **My rooms** displays an editor-style file tree, with expandable folders and
 rooms nested beneath them. Click a folder to expand or collapse it; click a
 room to open its drawing. Rooms without a folder appear at the root.
-The explorer docks on the right half of the screen, leaving a usable drawing
-canvas on the left. Its arrow collapses it to a narrow rail; expanding it
-restores your search and open folders. **Expand all** and **Collapse all**
-control the whole tree. Opening or creating a room keeps the explorer open.
-On phones, the expanded panel uses most of the screen; collapse it to draw.
+The explorer is a **Rooms Explorer** tab in Excalidraw's existing right sidebar,
+alongside the library and canvas search. The existing top-right sidebar button
+or **My rooms** opens it. The native pin and close buttons control docking and
+visibility; there is no separate rail or half-screen panel. Compact tree rows,
+icon-only actions, indentation guides, and right-click menus follow an editor
+Explorer layout. **Expand all** and **Collapse all** control the whole tree.
+Opening or creating a room keeps the explorer open.
+The room list appears independently of folder loading and stays visible during
+background refreshes. The app warms the room list in the background and retains
+it across sidebar closes, so reopening the explorer does not wait for a request.
+Room lists and folder metadata persist in IndexedDB and appear while fresh
+network requests run. Failed refreshes retain the available local metadata.
+Up to 32 confirmed drawings persist by room and key, including their ETags.
+Reopening a cached room displays the local drawing without waiting for server
+validation; **Checking for updates…** remains visible until validation completes.
+Cached room switches also restore the scene and cached images before the
+collaboration client finishes loading; connection setup runs in the background.
+The server validates the encrypted snapshot fingerprint and sends no drawing
+payload when it is unchanged, even after a browser restart.
+Edits made while validation runs are saved as separate room/key-scoped recovery
+drafts. They merge with the validated snapshot before broadcasting or saving;
+unchanged cached shapes removed from the server snapshot are not resurrected.
+Failed validation preserves local work and resumes the existing reconnect flow.
+Room switches ignore old responses; deleting a room clears its per-room cache
+and prevents a closing session's delayed draft write from recreating it.
+Drafts are not evicted with the confirmed-scene cache. Browser storage can still
+fail or be cleared/evicted: export important drawings as backups. Cached drawings
+are stored locally as decoded data, alongside room keys, like the existing canvas
+recovery storage. This is not an encrypted-at-rest vault.
+Room images also persist by room, key and file ID. Previously cached images
+appear without downloading again, and mixed requests download only missing
+files. Local images are cached before upload and alongside recovery drafts,
+so failed uploads do not discard the available local image data. Cached local
+images are not treated as proof of a successful remote upload. Deleting a room
+also deletes its cached images and blocks late attachment writes.
+Attachments remain until their room is explicitly deleted (even if its
+confirmed snapshot is evicted), to preserve recovery drafts; large image
+libraries can consume browser storage. Cache failures fall back to downloads.
+Local caching works with both the Node and Elixir API backends. Uncached
+images/fonts/features may still need the network.
+The Elixir backend additionally supports opt-in encrypted partial updates:
+`SCENE_SYNC_ENABLED=true BACKEND_ENGINE=elixir ./deploy.sh backend --local`.
+Update the app and refresh clients before enabling it. Small edits upload only
+changed shapes, removed IDs, and ordering when needed; cached-room downloads
+request only patches since the confirmed ETag. Revision checks prevent stale
+writers from overwriting concurrent saves, and periodic full checkpoints bound
+the patch chain. Node and default Elixir deployments retain full snapshots.
+Old clients cannot read active patch chains and are rejected safely. See
+`backend/README.md` for protocol limits and the compacted export required for
+Node rollback.
+See `docs/loading-benchmark.md` for isolated loading measurements, limitations,
+and instructions for reproducing cold-data, cached, and partial-update runs.
+Downloads time out after 20 seconds without receiving data, rather than after
+20 seconds total, so a slow but progressing transfer can finish. Empty-save
+protection checks snapshot existence with a body-free HEAD request instead of
+repeatedly downloading the entire drawing.
+Room joins merge saved snapshots with live peer updates;
+failed snapshot downloads show a connection error instead of being treated as
+empty rooms, and incomplete joins cannot save a partial scene over the snapshot.
+Deleting a room opens an explicit confirmation naming the room; confirm to
+remove it, or cancel to keep it. Deleting the current room disconnects its
+session but keeps the drawing on the local canvas.
 Search finds rooms and folder paths across the entire tree, automatically
 revealing matching branches without changing your saved expansion state.
 Folders can be nested: select a folder and use **New folder** to create a
-subfolder, or choose **Parent folder** in the editor. Choose **Top level** for a
-root folder. Editing a folder's parent moves it together with its subfolders;
-a folder cannot be moved into itself or a descendant. Names must be unique
+subfolder. Deselect the folder with the tree heading to create at the root.
+Creation and F2 rename use an inline name field in the tree: Enter saves,
+Escape cancels, and leaving a nonempty field saves it. No parent selector or
+separate save form is shown. A folder cannot be moved into itself or a descendant.
+Names must be unique
 within the same parent, but may be reused in different branches.
 
 Drag rooms or folders onto another folder to move them. While dragging, the
 **Top level** target moves items back to the root. On tablets, the room's move
-menu and the folder editor's **Parent folder** menu provide the same operations
-without dragging. Destination menus show full paths.
+menu provides room moves without dragging. Destination menus show full paths.
 Use Up/Down, Left/Right, Home/End, and Enter to navigate the tree with a keyboard.
 Press F2 to rename a focused room or folder.
 Click the tree's heading to deselect a folder before creating a root folder.

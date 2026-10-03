@@ -1,256 +1,214 @@
-@import "../../packages/excalidraw/css/variables.module.scss";
-
 .excalidraw {
-  .RoomsPage {
-    position: fixed;
-    inset: 0 0 0 auto;
-    width: 50vw;
-    max-width: 100vw;
-    box-sizing: border-box;
-    z-index: 100;
-    display: flex;
+  .rooms-explorer-tab {
+    min-height: 0;
     overflow: hidden;
-    border-inline-start: 1px solid var(--dialog-border-color);
-    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
-    background-color: var(--island-bg-color);
-    color: var(--text-primary-color, var(--color-primary, #1e1e1e));
+  }
 
-    &--collapsed {
-      width: 2.75rem;
-    }
-
-    &__rail {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      flex: 0 0 2.75rem;
-      gap: 1rem;
-      border-inline-end: 1px solid var(--dialog-border-color);
-      background: var(--app-bg-color, var(--island-bg-color));
-    }
-
-    &__railTitle {
-      writing-mode: vertical-rl;
-      font-size: 0.75rem;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      opacity: 0.6;
-    }
-
-    &__toggle {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 2.75rem;
-      height: 3rem;
-      border: none;
-      color: inherit;
-      background: transparent;
-      cursor: pointer;
-
-      &:hover {
-        background: var(--button-hover-bg);
-      }
-
-      &:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: -3px;
-      }
-
-      svg {
-        width: 1.25rem;
-        height: 1.25rem;
-      }
-    }
+  .RoomsPage {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--text-primary-color);
 
     &__inner {
       flex: 1;
       min-width: 0;
-      overflow-y: auto;
-      padding: 0 0.75rem 1rem;
+      overflow: auto;
       display: flex;
       flex-direction: column;
-      gap: 0.75rem;
-
-      &[hidden] {
-        display: none;
-      }
+      padding-bottom: 8px;
     }
 
     &__header {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      background-color: var(--island-bg-color);
-      padding: 0.75rem 0;
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      gap: 0.5rem;
+      gap: 4px;
+      min-height: 35px;
+      padding: 0 12px;
     }
 
     &__title {
       margin: 0;
-      font-size: 0.85rem;
-      font-weight: 600;
-      letter-spacing: 0.06em;
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
-    }
-
-    &__close {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 2rem;
-      height: 2rem;
-      border: none;
-      border-radius: 0.5rem;
-      background: transparent;
-      color: inherit;
-      cursor: pointer;
-
-      &:hover {
-        background-color: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
-      }
-
-      svg {
-        width: 1.25rem;
-        height: 1.25rem;
-      }
-    }
-
-    &__error {
-      border: 1px solid var(--color-danger, #e33);
-      border-radius: 0.5rem;
-      padding: 0.6rem 0.8rem;
-      font-size: 0.9rem;
-    }
-
-    &__empty {
-      opacity: 0.7;
-      font-size: 0.95rem;
     }
 
     &__actions {
       display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem;
+      gap: 2px;
       margin-inline-start: auto;
     }
 
     &__section {
       display: flex;
       flex-direction: column;
-      gap: 0.75rem;
+      gap: 0;
+      min-width: 0;
     }
 
-    &__sectionTitle {
-      margin: 0;
-      font-size: 1.05rem;
-      font-weight: 600;
-    }
+    &__filter {
+      box-sizing: border-box;
+      width: calc(100% - 24px);
+      height: 26px;
+      margin: 4px 12px 8px;
+      padding: 2px 6px;
+      border: 1px solid var(--dialog-border-color);
+      border-radius: 0;
+      background: var(--island-bg-color);
+      color: inherit;
+      font: inherit;
 
-    &__list {
-      display: flex;
-      flex-direction: column;
-      gap: 0.6rem;
-    }
-
-    &__join {
-      border-bottom: 1px solid var(--dialog-border-color);
-      padding-bottom: 1rem;
-
-      summary {
-        cursor: pointer;
-        font-size: 0.9rem;
-        width: fit-content;
-        padding: 0.5rem 0;
+      &:focus {
+        outline: 1px solid var(--color-primary);
+        outline-offset: -1px;
       }
+    }
+
+    &__treeToolbar {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      min-height: 26px;
+      padding: 0 6px;
+      background: var(--button-hover-bg);
     }
 
     &__explorerRoot {
       display: flex;
-      align-items: center;
-      gap: 0.75rem;
       flex: 1;
+      align-items: center;
+      gap: 4px;
       min-width: 0;
-      min-height: 2.75rem;
+      height: 26px;
       padding: 0;
       border: none;
       background: transparent;
       color: inherit;
-      text-align: start;
       font: inherit;
+      font-size: 11px;
       font-weight: 600;
+      text-align: start;
+      text-transform: uppercase;
       cursor: pointer;
-      overflow-wrap: anywhere;
 
-      span {
-        font-size: 0.8rem;
-        opacity: 0.5;
+      svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
       }
     }
 
-    &__tree {
-      padding: 0;
-      min-width: 0;
-      min-height: 18rem;
+    &__workspaceName,
+    &__folderName {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    &__treeItem {
-      display: flex;
-      align-items: center;
-      min-height: 2rem;
-      padding-inline-end: 0.5rem;
+    &__actionButton,
+    &__treeControl {
+      display: inline-flex;
       position: relative;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 3px;
+      border: none;
+      border-radius: 3px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+
+      svg {
+        width: 15px;
+        height: 15px;
+      }
 
       &:hover {
-        background: var(--button-hover-bg, rgba(0, 0, 0, 0.04));
+        background: var(--button-hover-bg);
       }
 
       &:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: -2px;
+        outline: 1px solid var(--color-primary);
+        outline-offset: -1px;
       }
 
-      &[aria-selected="true"] {
-        background: var(--color-primary-light);
+      &:disabled {
+        opacity: 0.35;
+        cursor: default;
       }
 
-      &--drop {
-        outline: 2px solid var(--color-primary);
-        outline-offset: -2px;
-        background: var(--color-primary-light);
+      &--delete,
+      &--confirm {
+        color: var(--color-danger);
       }
     }
 
-    &__rootDrop {
-      min-height: 2.75rem;
-      margin: 0.5rem;
-      padding: 0.5rem;
-      box-sizing: border-box;
-      border: 1px dashed var(--dialog-border-color);
-      font-size: 0.85rem;
+    &__iconPlus {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 12px;
+      background: var(--sidebar-bg-color);
+    }
+
+    &__tree {
+      min-width: 0;
+      padding: 2px 0;
+    }
+
+    &__treeItem {
+      position: relative;
       display: flex;
       align-items: center;
+      min-height: 22px;
+      padding-inline-end: 6px;
+
+      &:hover {
+        background-color: var(--button-hover-bg);
+      }
+
+      &[aria-selected="true"] {
+        background-color: var(--color-primary-light);
+      }
+
+      &:focus-visible {
+        outline: 1px solid var(--color-primary);
+        outline-offset: -1px;
+      }
+
+      &--drop {
+        background-color: var(--color-primary-light);
+        outline: 1px solid var(--color-primary);
+        outline-offset: -1px;
+      }
     }
 
     &__folderLabel {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      width: 100%;
+      gap: 4px;
+      flex: 1;
       min-width: 0;
-      min-height: 2.75rem;
+      height: 22px;
+      padding: 0;
       border: none;
       background: transparent;
       color: inherit;
       font: inherit;
       text-align: start;
       cursor: pointer;
-      padding: 0 0.5rem 0 0;
     }
 
     &__treeChevron,
@@ -259,100 +217,132 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      width: 16px;
       flex-shrink: 0;
-      width: 1.25rem;
 
       svg {
-        width: 1rem;
-        height: 1rem;
+        width: 14px;
+        height: 14px;
       }
     }
 
     &__folderIcon {
-      color: #b48937;
+      color: #b89c57;
     }
 
     &__fileIcon {
-      margin-inline-start: 1.75rem;
-      opacity: 0.6;
+      margin-inline-start: 20px;
+      opacity: 0.7;
     }
 
-    &__folderName {
+    &__treeCount {
+      margin-inline-start: auto;
+      padding: 0 4px;
+      font-size: 10px;
+      font-weight: 400;
+      opacity: 0.55;
+    }
+
+    &__row {
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      flex: 1;
+      min-width: 0;
+      min-height: 22px;
+      padding-inline-start: 4px;
+    }
+
+    &__rowMain {
+      flex: 1;
+      min-width: 0;
+    }
+
+    &__rowLabel {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      height: 22px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: start;
+      cursor: pointer;
+    }
+
+    &__rowId {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    &__treeCount {
-      margin-inline-start: auto;
-      font-size: 0.75rem;
-      opacity: 0.5;
-    }
-
-    &__tree .RoomsPage__empty {
-      padding: 1rem;
-    }
-
-    &__tree .RoomsPage__row {
-      border: none;
-      border-radius: 0;
-      padding: 0.15rem 0 0.15rem 0.5rem;
-      flex: 1;
-      min-width: 0;
-      gap: 0.5rem;
-      background: transparent;
-    }
-
-    &__tree .RoomsPage__rowLabel {
-      min-height: 1.5rem;
-    }
-
-    &__tree .RoomsPage__rowId {
-      font-size: 0.9rem;
-      font-weight: 400;
-    }
-
-    &__tree .RoomsPage__rowMeta {
-      font-size: 0.7rem;
-      display: none;
-    }
-
-    &__tree .RoomsPage__row--active .RoomsPage__rowId {
-      color: var(--color-primary);
+    &__row--active &__rowId {
       font-weight: 600;
     }
 
-    &__tree .RoomsPage__row--active .RoomsPage__rowMeta {
-      display: flex;
-    }
-
-    &__tree .RoomsPage__rowMain {
-      flex: 1 1 8rem;
-    }
-
-    &__tree .RoomsPage__rowSubId {
+    &__rowMeta {
       display: none;
     }
 
-    &__tree .RoomsPage__actionButton {
-      min-width: 2rem;
-      height: 2rem;
+    &__rowActions {
+      display: flex;
+      align-items: center;
+      position: absolute;
+      inset: 0 0 auto auto;
+      height: 22px;
+      background: var(--sidebar-bg-color);
+      opacity: 0;
+      pointer-events: none;
     }
 
-    &__tree .RoomsPage__select--move {
-      max-width: 8rem;
-      width: 8rem;
-      font-size: 0.8rem;
+    &__treeItem:hover &__rowActions,
+    &__treeItem:focus-within &__rowActions,
+    &__row--busy &__rowActions {
+      opacity: 1;
+      pointer-events: auto;
     }
 
-    @media (max-width: 900px) {
-      &__tree .RoomsPage__select--move {
-        max-width: 5rem;
-        width: 5rem;
+    &__treeItem:hover &__rowMain,
+    &__treeItem:focus-within &__rowMain,
+    &__row--busy &__rowMain {
+      padding-inline-end: 88px;
+    }
+
+    &__select {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      min-width: 0;
+      min-height: 26px;
+      padding: 2px 6px;
+      border: 1px solid var(--dialog-border-color);
+      border-radius: 0;
+      background: var(--island-bg-color);
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+
+      svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
       }
 
-      &__tree .RoomsPage__badge:not(.RoomsPage__badge--active) {
-        display: none;
+      &--move {
+        justify-content: center;
+        width: 22px;
+        min-height: 22px;
+        padding: 3px;
+        border: none;
+        background: transparent;
+
+        > span {
+          display: none;
+        }
       }
     }
 
@@ -360,359 +350,150 @@
       display: flex;
       flex-wrap: wrap;
       align-items: flex-end;
-      gap: 0.5rem;
+      gap: 6px;
+      padding: 8px 12px;
     }
 
-    &__treeToolbar {
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 0.25rem;
-      padding: 0.35rem 0;
-      border-bottom: 1px solid var(--dialog-border-color);
-
-      > span {
-        margin-inline-end: auto;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        opacity: 0.6;
-      }
+    &__folderEdit {
+      flex: 1;
+      min-width: 0;
+      padding-inline-start: 4px;
     }
 
-    &__treeControl {
-      padding: 0.25rem 0.4rem;
-      border: none;
-      border-radius: 0.25rem;
-      background: transparent;
-      color: inherit;
-      font: inherit;
-      font-size: 0.75rem;
-      cursor: pointer;
-
-      &:hover {
-        background: var(--button-hover-bg);
-      }
-
-      &:focus-visible {
-        outline: 2px solid var(--color-primary);
-      }
-
-      &:disabled {
-        opacity: 0.4;
-        cursor: default;
-      }
+    &__folderEditError {
+      padding: 4px;
+      border: 1px solid var(--color-danger);
+      background: var(--island-bg-color);
+      color: var(--color-danger);
+      font-size: 12px;
     }
 
-    @media (max-width: 600px) {
-      width: calc(100vw - 2.75rem);
-
-      &--collapsed {
-        width: 2.75rem;
-      }
+    &__treeItem--editing {
+      align-items: flex-start;
     }
 
-    &__folderNavigation {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-
-    &__folderButton {
-      min-height: 2.75rem;
-      padding: 0.35rem 0.75rem;
-      border: 1px solid var(--dialog-border-color);
-      border-radius: 0.4rem;
+    &__editInput {
+      box-sizing: border-box;
+      width: 100%;
+      height: 22px;
+      padding: 0 4px;
+      border: 1px solid var(--color-primary);
+      border-radius: 0;
       background: var(--island-bg-color);
       color: inherit;
       font: inherit;
-      cursor: pointer;
-      overflow-wrap: anywhere;
-
-      &:hover {
-        background: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
-      }
-
-      &:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: 2px;
-      }
-
-      &:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
     }
 
-    &__folderField {
-      display: flex;
-      flex: 1 1 12rem;
-      min-width: 0;
-      flex-direction: column;
-      gap: 0.35rem;
-      font-size: 0.9rem;
-    }
-
-    &__select {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.5rem;
-      min-width: 0;
-      min-height: 2.75rem;
-      padding: 0.35rem 0.5rem;
-      border: 1px solid var(--dialog-border-color);
-      border-radius: 0.4rem;
-      background: var(--island-bg-color);
-      color: inherit;
-      font: inherit;
-      cursor: pointer;
-
-      > span {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      > svg {
-        width: 1rem;
-        height: 1rem;
-        flex-shrink: 0;
-      }
-
-      &:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-
-      &:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: 2px;
-      }
-
-      &--move {
-        max-width: 10rem;
-      }
-    }
-
-    &__folderMenu {
+    &__folderMenu,
+    &__contextMenu {
       z-index: 2;
-      min-width: var(--radix-dropdown-menu-trigger-width);
-      max-width: calc(100vw - 1rem);
+      min-width: 160px;
+      max-width: calc(100vw - 16px);
       max-height: min(
-        20rem,
-        var(--radix-dropdown-menu-content-available-height)
+        320px,
+        var(--radix-dropdown-menu-content-available-height, 320px)
       );
-      overflow-y: auto;
-      padding: 0.25rem;
+      overflow: auto;
+      padding: 4px;
       border: 1px solid var(--dialog-border-color);
-      border-radius: 0.5rem;
+      border-radius: 3px;
       background: var(--island-bg-color);
       color: inherit;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      font: inherit;
     }
 
-    &__folderOption {
+    &__folderOption,
+    &__contextItem {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      min-height: 2.75rem;
-      padding: 0 0.5rem;
-      border-radius: 0.25rem;
+      gap: 6px;
+      min-height: 26px;
+      padding: 0 8px;
+      border-radius: 2px;
       cursor: pointer;
-      overflow-wrap: anywhere;
 
       &[data-highlighted] {
         outline: none;
-        background: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
+        background: var(--color-primary);
+        color: white;
+      }
+
+      &[data-disabled] {
+        opacity: 0.4;
       }
     }
 
     &__folderCheck {
-      width: 1rem;
+      display: flex;
+      width: 14px;
       flex-shrink: 0;
 
       svg {
-        display: block;
-        width: 1rem;
-        height: 1rem;
+        width: 14px;
+        height: 14px;
       }
     }
 
-    &__row {
-      border: 1px solid var(--dialog-border-color);
-      border-radius: 0.6rem;
-      padding: 0.7rem 0.8rem;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.6rem;
-      align-items: center;
+    &__error,
+    &__empty {
+      margin: 6px 12px;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
 
-      &:hover {
-        background-color: var(--button-hover-bg, rgba(0, 0, 0, 0.03));
+    &__deleteConfirmation {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--dialog-border-color);
+
+      p {
+        margin: 0 0 8px;
+        overflow-wrap: anywhere;
       }
 
-      &--active {
-        border-color: var(--color-primary);
-      }
-
-      &:hover .RoomsPage__rowActions,
-      &:focus-within .RoomsPage__rowActions {
-        opacity: 1;
-      }
-
-      &--busy .RoomsPage__rowActions {
-        opacity: 1;
+      .RoomsPage__actions {
+        flex-wrap: wrap;
       }
     }
 
-    &__rowMain {
-      flex: 1 1 12rem;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.2rem;
+    &__error {
+      color: var(--color-danger);
     }
 
-    &__rowLabel {
-      all: unset;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      min-height: 2.75rem;
-      justify-content: center;
-
-      &:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: 2px;
-      }
+    &__empty {
+      opacity: 0.7;
     }
 
-    &__rowId {
-      font-weight: 600;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    &__rowSubId {
-      font-size: 0.8rem;
-      opacity: 0.65;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    &__rowMeta {
-      font-size: 0.8rem;
-      opacity: 0.75;
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      flex-wrap: wrap;
-    }
-
-    &__badge {
-      font-size: 0.72rem;
-      border: 1px solid var(--dialog-border-color);
-      border-radius: 1rem;
-      padding: 0.05rem 0.5rem;
-
-      &--active {
-        border-color: var(--color-primary);
-      }
-    }
-
-    // row actions (rename/share/delete) reveal on hover, focus or while
-    // the row is busy (editing/confirming/sharing) — a wall of icon
-    // buttons on every row is visual noise. Touch layouts have no hover,
-    // so the actions stay put there.
-    &__rowActions {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.25rem;
-      margin-left: auto;
-      align-self: center;
-      flex-shrink: 0;
-      opacity: 0;
-      transition: opacity 0.12s ease-in;
-    }
-
-    @media (hover: none), (any-pointer: coarse) {
-      &__rowActions {
-        opacity: 1;
-      }
-    }
-
-    &__actionButton {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 3rem;
-      height: 3rem;
-      padding: 0 0.4rem;
-      border: none;
-      border-radius: 0.5rem;
-      background: transparent;
-      color: inherit;
-      cursor: pointer;
-      font-size: 0.85rem;
-
-      &:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: 2px;
-      }
-
-      &:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-
-      &:hover {
-        background-color: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
-      }
-
-      svg {
-        width: 1.1rem;
-        height: 1.1rem;
-      }
-
-      &--delete {
-        color: var(--color-danger, #e33);
-      }
-
-      &--confirm {
-        border: 1px solid var(--color-danger, #e33);
-      }
-    }
-
-    &__editInput {
-      font: inherit;
-      padding: 0.35rem 0.5rem;
-      border-radius: 0.4rem;
-      border: 1px solid var(--color-primary);
-      background: transparent;
-      color: inherit;
-      width: 100%;
-      box-sizing: border-box;
+    &__join {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--dialog-border-color);
     }
 
     &__sharePanel {
       flex: 1 1 100%;
-      display: flex;
-      flex-direction: column;
-      gap: 0.6rem;
-      border-top: 1px solid var(--dialog-border-color);
-      padding-top: 0.6rem;
+      min-width: 0;
+      padding: 8px 0;
     }
 
     &__shareRow {
       display: flex;
       align-items: flex-end;
-      gap: 0.5rem;
+      gap: 4px;
+      min-width: 0;
+      margin-top: 4px;
+
+      > .excalidraw-textField {
+        min-width: 0;
+      }
+    }
+
+    &__rootDrop {
+      display: flex;
+      align-items: center;
+      min-height: 26px;
+      margin: 6px 12px;
+      padding: 4px;
+      border: 1px dashed var(--dialog-border-color);
     }
   }
 }

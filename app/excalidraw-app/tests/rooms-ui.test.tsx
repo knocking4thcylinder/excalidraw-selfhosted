@@ -5,14 +5,24 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { vi } from "vitest";
+import { clear, createStore } from "idb-keyval";
 
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+
+import {
+  cacheFolders,
+  cacheRooms,
+  clearRoomMemoryCache,
+  flushRoomCache,
+} from "../data/roomCache";
 
 import { appJotaiStore, Provider } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
 import {
+  deleteRoom,
   deleteRoomFolder,
   fetchRoomFolders,
   fetchRooms,
@@ -20,6 +30,7 @@ import {
   saveRoomFolder,
 } from "../data/rooms";
 import { RoomsPage } from "../rooms/RoomsPage";
+import { roomFoldersAtom, roomsRegistryAtom } from "../rooms/explorerState";
 import { JoinRoom } from "../share/JoinRoom";
 import { ShareDialog, shareDialogStateAtom } from "../share/ShareDialog";
 
@@ -130,21 +141,312 @@ const chooseTreeFolder = async (path: string) => {
   }
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+  await flushRoomCache();
+  clearRoomMemoryCache();
+  await clear(createStore("excalidraw-rooms-db", "cache"));
+  appJotaiStore.set(roomsRegistryAtom, null);
+  appJotaiStore.set(roomFoldersAtom, null);
   vi.mocked(fetchRooms).mockResolvedValue(rooms);
   vi.mocked(fetchRoomFolders).mockResolvedValue([]);
   appJotaiStore.set(activeRoomLinkAtom, null);
   appJotaiStore.set(shareDialogStateAtom, { isOpen: false });
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await flushRoomCache();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   window.history.replaceState({}, "", "/");
 });
 
 describe("rooms UI", () => {
+  it("loads persisted rooms and folders while network refresh is pending, including offline", async () => {
+    await cacheRooms(rooms.map((room) => ({ ...room, folderId: "school" })));
+    await cacheFolders([{ id: "school", name: "School" }]);
+    let resolveRooms!: (rooms: Awaited<ReturnType<typeof fetchRooms>>) => void;
+    let resolveFolders!: (
+      folders: Awaited<ReturnType<typeof fetchRoomFolders>>,
+    ) => void;
+    vi.mocked(fetchRooms).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRooms = resolve;
+        }),
+    );
+    vi.mocked(fetchRoomFolders).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFolders = resolve;
+        }),
+    );
+    mountRooms();
+    expect(
+      await screen.findByRole("button", { name: "Open folder School" }),
+    ).toBeInTheDocument();
+    await chooseTreeFolder("School");
+    expect(
+      await screen.findByRole("treeitem", { name: "Algebra" }),
+    ).toBeInTheDocument();
+    await act(async () => {
+      resolveRooms(null);
+      resolveFolders(null);
+    });
+    expect(
+      screen.getByRole("treeitem", { name: "Algebra" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open folder School" }),
+    ).toBeInTheDocument();
+  });
+  it("reopens immediately with cached rooms while a fresh request is still pending", async () => {
+    const first = mountRooms();
+    await screen.findByRole("treeitem", { name: "Algebra" });
+    first.unmount();
+    let resolveRooms!: (result: Awaited<ReturnType<typeof fetchRooms>>) => void;
+    vi.mocked(fetchRooms).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRooms = resolve;
+        }),
+    );
+    mountRooms();
+    expect(
+      screen.getByRole("treeitem", { name: "Algebra" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await act(async () => resolveRooms(rooms));
+  });
+
+  it("shows rooms before a slow folder request finishes", async () => {
+    let resolveFolders!: (
+      folders: Awaited<ReturnType<typeof fetchRoomFolders>>,
+    ) => void;
+    vi.mocked(fetchRoomFolders).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFolders = resolve;
+        }),
+    );
+    mountRooms();
+    expect(
+      await screen.findByRole("button", { name: "Algebra" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => resolveFolders([]));
+  });
+
+  it("keeps the room tree visible during a background refresh", async () => {
+    vi.mocked(fetchRoomFolders).mockResolvedValueOnce(null);
+    mountRooms();
+    await screen.findByRole("button", { name: "Algebra" });
+    let resolveRooms!: (result: Awaited<ReturnType<typeof fetchRooms>>) => void;
+    vi.mocked(fetchRooms).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRooms = resolve;
+        }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(
+      screen.getByRole("treeitem", { name: "Algebra" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await act(async () => resolveRooms(rooms));
+  });
+
+  it("deletes a room only after confirming and immediately removes its tree row", async () => {
+    vi.mocked(deleteRoom).mockResolvedValue(true);
+    mountRooms();
+    const algebra = await screen.findByRole("treeitem", { name: "Algebra" });
+    fireEvent.click(within(algebra).getByRole("button", { name: "Delete" }));
+    const confirmation = screen.getByRole("alertdialog", { name: "Delete" });
+    expect(confirmation).toHaveTextContent("Algebra");
+    expect(
+      within(confirmation).getByRole("button", { name: "Delete" }),
+    ).toHaveFocus();
+    expect(deleteRoom).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Delete" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("treeitem", { name: "Algebra" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(deleteRoom).toHaveBeenCalledWith("room-a", "key-a");
+    expect(
+      screen.getByRole("treeitem", { name: "Physics" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("cancels room deletion without closing Explorer or calling the API", async () => {
+    const { onClose } = mountRooms();
+    fireEvent.contextMenu(
+      await screen.findByRole("treeitem", { name: "Physics" }),
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    const confirmation = screen.getByRole("alertdialog", { name: "Delete" });
+    expect(confirmation).toHaveTextContent("Physics");
+    fireEvent.keyDown(confirmation, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(deleteRoom).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps the failed deletion visible so the user can retry", async () => {
+    vi.mocked(deleteRoom)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    mountRooms();
+    fireEvent.click(
+      within(
+        await screen.findByRole("treeitem", { name: "Algebra" }),
+      ).getByRole("button", { name: "Delete" }),
+    );
+    const confirmation = screen.getByRole("alertdialog", { name: "Delete" });
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Delete" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't delete the room",
+    );
+    expect(
+      screen.getByRole("treeitem", { name: "Algebra" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Delete" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("treeitem", { name: "Algebra" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(deleteRoom).toHaveBeenCalledTimes(2);
+  });
+
+  it("blocks repeated deletion requests until the first one completes", async () => {
+    let resolveDelete!: (deleted: boolean) => void;
+    vi.mocked(deleteRoom).mockReturnValue(
+      new Promise((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    mountRooms();
+    fireEvent.click(
+      within(
+        await screen.findByRole("treeitem", { name: "Algebra" }),
+      ).getByRole("button", { name: "Delete" }),
+    );
+    const button = within(
+      screen.getByRole("alertdialog", { name: "Delete" }),
+    ).getByRole("button", { name: "Delete" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(deleteRoom).toHaveBeenCalledTimes(1);
+    await act(async () => resolveDelete(true));
+    expect(
+      screen.queryByRole("treeitem", { name: "Algebra" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["Escape", "blur"])(
+    "cancels an empty inline folder draft on %s",
+    async (action) => {
+      mountRooms();
+      fireEvent.click(
+        await screen.findByRole("button", { name: "New folder" }),
+      );
+      const input = screen.getByRole("textbox", { name: "Folder name" });
+      expect(input).toHaveFocus();
+      expect(input.closest('[role="treeitem"]')).toHaveAttribute(
+        "aria-level",
+        "1",
+      );
+      expect(
+        screen.queryByRole("button", { name: "Parent folder" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Save folder" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Cancel" }),
+      ).not.toBeInTheDocument();
+      if (action === "Escape") {
+        fireEvent.keyDown(input, { key: "Escape" });
+      } else {
+        fireEvent.blur(input);
+      }
+      expect(
+        screen.queryByRole("textbox", { name: "Folder name" }),
+      ).not.toBeInTheDocument();
+      expect(saveRoomFolder).not.toHaveBeenCalled();
+    },
+  );
+
+  it("saves a nonempty inline folder draft on blur", async () => {
+    vi.mocked(saveRoomFolder).mockResolvedValue({
+      id: "school",
+      name: "School",
+    });
+    mountRooms();
+    fireEvent.click(await screen.findByRole("button", { name: "New folder" }));
+    const input = screen.getByRole("textbox", { name: "Folder name" });
+    fireEvent.change(input, { target: { value: "School" } });
+    fireEvent.blur(input);
+    expect(
+      await screen.findByRole("treeitem", { name: "School" }),
+    ).toBeInTheDocument();
+    expect(saveRoomFolder).toHaveBeenCalledWith("School", undefined, null);
+    expect(saveRoomFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it("renames a nested folder inline without changing its parent", async () => {
+    vi.mocked(fetchRoomFolders).mockResolvedValue([
+      { id: "school", name: "School" },
+      { id: "math", name: "Math", parentId: "school" },
+    ]);
+    vi.mocked(saveRoomFolder).mockResolvedValue({
+      id: "math",
+      name: "Calculus",
+      parentId: "school",
+    });
+    mountRooms();
+    await chooseTreeFolder("School / Math");
+    fireEvent.keyDown(screen.getByRole("treeitem", { name: "Math" }), {
+      key: "F2",
+    });
+    const input = screen.getByRole("textbox", { name: "Folder name" });
+    expect(input.closest('[role="treeitem"]')).toHaveAttribute(
+      "aria-level",
+      "2",
+    );
+    fireEvent.change(input, { target: { value: "Calculus" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+    expect(
+      await screen.findByRole("treeitem", { name: "Calculus" }),
+    ).toHaveAttribute("aria-level", "2");
+    expect(saveRoomFolder).toHaveBeenCalledWith("Calculus", "math", "school");
+    expect(saveRoomFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it("renames rooms through the Explorer context menu", async () => {
+    mountRooms();
+    fireEvent.contextMenu(
+      await screen.findByRole("treeitem", { name: "Algebra" }),
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    expect(screen.getByRole("textbox", { name: "Room name" })).toHaveValue(
+      "Algebra",
+    );
+    expect(screen.getByRole("textbox", { name: "Room name" })).toHaveFocus();
+  });
+
   it("renames focused folders with F2 and cancels without closing the page", async () => {
     vi.mocked(fetchRoomFolders).mockResolvedValue([
       { id: "school", name: "School" },
@@ -299,12 +601,19 @@ describe("rooms UI", () => {
     await chooseTreeFolder("School (0)");
     fireEvent.click(screen.getByRole("button", { name: "New folder" }));
     expect(
-      screen.getByRole("button", { name: "Parent folder" }),
-    ).toHaveTextContent("School");
+      screen.queryByRole("button", { name: "Parent folder" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen
+        .getByRole("textbox", { name: "Folder name" })
+        .closest('[role="treeitem"]'),
+    ).toHaveAttribute("aria-level", "2");
     fireEvent.change(screen.getByRole("textbox", { name: "Folder name" }), {
       target: { value: "Math" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), {
+      key: "Enter",
+    });
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "All rooms" }),
@@ -367,7 +676,7 @@ describe("rooms UI", () => {
     expect(screen.getByRole("button", { name: "Algebra" })).toBeInTheDocument();
   });
 
-  it("moves a folder with its descendants while blocking descendant parents", async () => {
+  it("renames a folder inline without moving it or its descendants", async () => {
     vi.mocked(fetchRoomFolders).mockResolvedValue([
       { id: "school", name: "School" },
       { id: "math", name: "Math", parentId: "school" },
@@ -378,35 +687,33 @@ describe("rooms UI", () => {
     ]);
     vi.mocked(saveRoomFolder).mockResolvedValue({
       id: "school",
-      name: "School",
-      parentId: "work",
+      name: "Classes",
     });
     mountRooms();
     await chooseTreeFolder("School (1)");
     fireEvent.click(screen.getByRole("button", { name: "Rename folder" }));
-    fireEvent.keyDown(screen.getByRole("button", { name: "Parent folder" }), {
-      key: "ArrowDown",
-    });
+    const input = screen.getByRole("textbox", { name: "Folder name" });
+    expect(input.closest('[role="treeitem"]')).toHaveAttribute(
+      "aria-label",
+      "School",
+    );
     expect(
-      screen.queryByRole("menuitemradio", { name: "School" }),
+      screen.queryByRole("button", { name: "Parent folder" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("menuitemradio", { name: "School / Math" }),
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+    fireEvent.change(input, { target: { value: "Classes" } });
+    fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("Work / School"),
+      ).toHaveTextContent("Classes"),
     );
-    expect(saveRoomFolder).toHaveBeenCalledWith("School", "school", "work");
+    expect(saveRoomFolder).toHaveBeenCalledWith("Classes", "school", null);
     expect(
-      screen.getByRole("button", { name: "Open folder Work / School / Math" }),
+      screen.getByRole("button", { name: "Open folder Classes / Math" }),
     ).toBeInTheDocument();
   });
 
-  it("can move a nested folder back to the top level", async () => {
+  it("moves a nested folder back to the root by dragging", async () => {
     vi.mocked(fetchRoomFolders).mockResolvedValue([
       { id: "school", name: "School" },
       { id: "math", name: "Math", parentId: "school" },
@@ -414,9 +721,11 @@ describe("rooms UI", () => {
     vi.mocked(saveRoomFolder).mockResolvedValue({ id: "math", name: "Math" });
     mountRooms();
     await chooseTreeFolder("School / Math (0)");
-    fireEvent.click(screen.getByRole("button", { name: "Rename folder" }));
-    await chooseFolder("Parent folder", "Top level");
-    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+    const transfer = { setData: vi.fn() };
+    fireEvent.dragStart(screen.getByRole("treeitem", { name: "Math" }), {
+      dataTransfer: transfer,
+    });
+    fireEvent.drop(screen.getByText("Top level"), { dataTransfer: transfer });
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "All rooms" }),
@@ -439,7 +748,10 @@ describe("rooms UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete folder" }));
     expect(screen.getByText(/and its subfolders/)).toBeInTheDocument();
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Delete folder" })[1],
+      within(screen.getByText(/and its subfolders/).parentElement!).getByRole(
+        "button",
+        { name: "Delete folder" },
+      ),
     );
     await waitFor(() =>
       expect(
@@ -500,7 +812,9 @@ describe("rooms UI", () => {
     const name = screen.getByRole("textbox", { name: "Folder name" });
     expect(name).toHaveFocus();
     fireEvent.change(name, { target: { value: " School " } });
-    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), {
+      key: "Enter",
+    });
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "All rooms" }),
@@ -538,7 +852,9 @@ describe("rooms UI", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Folder name" }), {
       target: { value: "Classes" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), {
+      key: "Enter",
+    });
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "All rooms" }),
@@ -608,7 +924,10 @@ describe("rooms UI", () => {
     ).toBeInTheDocument();
     expect(deleteRoomFolder).not.toHaveBeenCalled();
     fireEvent.click(
-      screen.getAllByRole("button", { name: "Delete folder" })[1],
+      within(
+        screen.getByText(/All rooms inside will move to Unfiled/)
+          .parentElement!,
+      ).getByRole("button", { name: "Delete folder" }),
     );
     await waitFor(() =>
       expect(
@@ -629,7 +948,9 @@ describe("rooms UI", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Folder name" }), {
       target: { value: "School" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), {
+      key: "Enter",
+    });
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Couldn't save the folder",
     );
@@ -744,8 +1065,8 @@ describe("rooms UI", () => {
     document.body.append(opener);
     opener.focus();
     const { onClose, unmount } = mountRooms();
-    const toggleButton = screen.getByRole("button", {
-      name: "Collapse rooms sidebar",
+    const toggleButton = screen.getByRole("searchbox", {
+      name: "Search rooms",
     });
     expect(toggleButton).toHaveFocus();
     expect(screen.getByRole("complementary")).not.toHaveAttribute("aria-modal");
@@ -759,45 +1080,6 @@ describe("rooms UI", () => {
     unmount();
     expect(opener).toHaveFocus();
     opener.remove();
-  });
-
-  it("collapses to a rail and preserves search and expanded folders", async () => {
-    vi.mocked(fetchRoomFolders).mockResolvedValue([
-      { id: "school", name: "School" },
-    ]);
-    vi.mocked(fetchRooms).mockResolvedValue([
-      { ...rooms[0], folderId: "school" },
-    ]);
-    const { onClose } = mountRooms();
-    await chooseTreeFolder("School");
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search rooms" }), {
-      target: { value: "Algebra" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse rooms sidebar" }),
-    );
-    const expandButton = screen.getByRole("button", {
-      name: "Expand rooms sidebar",
-    });
-    expect(expandButton).toHaveAttribute("aria-expanded", "false");
-    expect(expandButton).toHaveFocus();
-    expect(screen.queryByRole("tree")).not.toBeInTheDocument();
-    expect(onClose).not.toHaveBeenCalled();
-    fireEvent.click(expandButton);
-    expect(screen.getByRole("searchbox", { name: "Search rooms" })).toHaveValue(
-      "Algebra",
-    );
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search rooms" }), {
-      target: { value: "" },
-    });
-    expect(screen.getByRole("treeitem", { name: "School" })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
-    expect(
-      screen.getByRole("treeitem", { name: "Algebra" }),
-    ).toBeInTheDocument();
-    expect(fetchRooms).toHaveBeenCalledTimes(1);
   });
 
   it("expands and collapses the whole folder tree", async () => {

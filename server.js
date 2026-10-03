@@ -5,6 +5,13 @@
 const http = require("http");
 const fs = require("fs");
 const crypto = require("crypto");
+const snapshotEtags = new WeakMap();
+const sceneEtag = (snapshot) => {
+  if (!snapshotEtags.has(snapshot)) {
+    snapshotEtags.set(snapshot, `"${crypto.createHash("sha256").update(snapshot.iv).update(snapshot.ciphertext).digest("hex")}"`);
+  }
+  return snapshotEtags.get(snapshot);
+};
 
 const PORT = process.env.PORT || 3003;
 const FILE = process.env.CODES_FILE || "/data/codes.json";
@@ -35,9 +42,10 @@ const saveScenes = () => {
 };
 
 // JSON reply for the /api/rooms endpoints — never cached (like /api/resolve)
-const json = (res, status, obj) => {
-  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
-  res.end(JSON.stringify(obj));
+const json = (res, status, obj, headers = {}) => {
+  const body = JSON.stringify(obj);
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "content-length": Buffer.byteLength(body), ...headers });
+  res.end(body);
 };
 
 // purely-alphanumeric ids are case-normalized; keys are case-sensitive, never normalized
@@ -301,6 +309,7 @@ const snapOf = (s) => ({
   version: s.version ?? null,
   updatedAt: s.updatedAt,
   isEmpty: s.isEmpty === true,
+  ...(s.patches?.length ? { patches: s.patches } : {}),
 });
 
     const hs = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/scene-history$/);
@@ -319,7 +328,7 @@ const snapOf = (s) => ({
     }
 
     const sm = u.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{1,64})\/scene$/);
-    if (req.method === "GET" && sm) {
+    if ((req.method === "GET" || req.method === "HEAD") && sm) {
       const id = normId(sm[1]);
       const room = rooms[id];
       if (!room) { json(res, 404, { error: "unknown room" }); return; }
@@ -331,8 +340,20 @@ const snapOf = (s) => ({
       const slot = Number(u.searchParams.get("slot") || 0);
       const pick = slot === 0 ? s : (s.history || [])[slot - 1];
       if (!pick) { json(res, 404, { error: "no such slot" }); return; }
+      if (req.method === "HEAD") {
+        res.writeHead(200, { "cache-control": "no-store", "etag": sceneEtag(pick) });
+        res.end();
+        return;
+      }
+      if (pick.patches?.length) { json(res, 409, { error: "scene sync client and backend required" }); return; }
       const out = snapOf(pick);
-      json(res, 200, { iv: out.iv, ciphertext: out.ciphertext, version: out.version, updatedAt: out.updatedAt });
+      const etag = sceneEtag(pick);
+      if (req.headers["if-none-match"] === etag) {
+        res.writeHead(304, { "etag": etag, "cache-control": "no-store" });
+        res.end();
+        return;
+      }
+      json(res, 200, { iv: out.iv, ciphertext: out.ciphertext, version: out.version, updatedAt: out.updatedAt }, { etag });
       return;
     }
 
@@ -363,6 +384,7 @@ const snapOf = (s) => ({
           return;
         }
         const prev = scenes[id];
+        if (prev?.patches?.length) { json(res, 409, { error: "scene sync backend required" }); return; }
         const declaresEmpty = p.isEmpty === true;
         const declaresNonEmpty = p.isEmpty === false;
         const incomingVersion =

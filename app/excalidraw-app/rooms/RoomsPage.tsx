@@ -2,7 +2,6 @@ import { copyTextToSystemClipboard } from "@excalidraw/excalidraw/clipboard";
 import { FilledButton } from "@excalidraw/excalidraw/components/FilledButton";
 import { TextField } from "@excalidraw/excalidraw/components/TextField";
 import {
-  CloseIcon,
   LinkIcon,
   PlusIcon,
   TrashIcon,
@@ -10,18 +9,17 @@ import {
   pencilIcon,
   playerStopFilledIcon,
   share,
-  sidebarRightIcon,
-  chevronRight,
+  LoadIcon,
+  chevronDownIcon,
 } from "@excalidraw/excalidraw/components/icons";
-import { CaptureUpdateAction } from "@excalidraw/excalidraw";
+import { CaptureUpdateAction, zoomToFitBounds } from "@excalidraw/excalidraw";
+import { getCommonBounds } from "@excalidraw/element";
 import { useExcalidrawContainer } from "@excalidraw/excalidraw/components/App";
-import {
-  restoreAppState,
-  restoreElements,
-} from "@excalidraw/excalidraw/data/restore";
+import { restoreAppState } from "@excalidraw/excalidraw/data/restore";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { APP_NAME, KEYS } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
+import { ContextMenu } from "radix-ui";
 
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
@@ -39,13 +37,20 @@ import {
 } from "../data/rooms";
 
 import { JoinRoom } from "../share/JoinRoom";
-import { useAtomValue } from "../app-jotai";
+import { appJotaiStore, useAtom, useAtomValue } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
+import {
+  cacheFolders,
+  cacheRooms,
+  readCachedFolders,
+  readCachedRooms,
+} from "../data/roomCache";
 
 import { closeRoomsPage, getRoomPageLink } from "./roomsRoute";
 import { FolderMenu } from "./FolderMenu";
 import { RoomExplorer } from "./RoomExplorer";
 import { getFolderDescendantIds, getFolderTree } from "./folderTree";
+import { roomFoldersAtom, roomsRegistryAtom } from "./explorerState";
 import "./RoomsPage.scss";
 
 import type { CollabAPI } from "../collab/Collab";
@@ -54,25 +59,28 @@ export const RoomsPage = ({
   collabAPI,
   excalidrawAPI,
   onClose,
-  onCollapseChange,
 }: {
   collabAPI: CollabAPI | null;
   excalidrawAPI: ExcalidrawImperativeAPI | null;
   onClose: () => void;
-  onCollapseChange?: (collapsed: boolean) => void;
 }) => {
   const { t } = useI18n();
   const { container } = useExcalidrawContainer();
   const ownerWindow = container?.ownerDocument.defaultView ?? window;
 
-  const [rooms, setRooms] = useState<ServerRoomEntry[] | null>(null);
+  const [rooms, setRooms] = useAtom(roomsRegistryAtom, {
+    store: appJotaiStore,
+  });
   const [loading, setLoading] = useState(true);
-  const [collapsed, setCollapsed] = useState(false);
-  const toggleRef = useRef<HTMLButtonElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
+  const [joinVisible, setJoinVisible] = useState(false);
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
   const [confirmingDeleteRoomId, setConfirmingDeleteRoomId] = useState<
     string | null
   >(null);
+  const [deletingRoom, setDeletingRoom] = useState(false);
+  const roomDeletionInFlight = useRef(false);
+  const deleteConfirmationRef = useRef<HTMLDivElement>(null);
   const [sharingRoomId, setSharingRoomId] = useState<string | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
   const [shareCodeLoading, setShareCodeLoading] = useState(false);
@@ -84,20 +92,48 @@ export const RoomsPage = ({
   const transitionRef = useRef(false);
   const [transitioning, setTransitioning] = useState(false);
   const [search, setSearch] = useState("");
-  const [folders, setFolders] = useState<RoomFolder[] | null>(null);
+  const [folders, setFolders] = useAtom(roomFoldersAtom, {
+    store: appJotaiStore,
+  });
+  const [foldersLoading, setFoldersLoading] = useState(true);
   const [selectedFolderId, setSelectedFolderId] = useState("all");
+  useEffect(() => {
+    if (rooms) {
+      void cacheRooms(rooms);
+    }
+  }, [rooms]);
+  useEffect(() => {
+    if (folders) {
+      void cacheFolders(folders);
+    }
+  }, [folders]);
   const [folderEditor, setFolderEditor] = useState<"create" | "rename" | null>(
     null,
   );
   const [folderName, setFolderName] = useState("");
   const [folderParentId, setFolderParentId] = useState("");
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const folderSubmission = useRef(false);
   const [folderBusy, setFolderBusy] = useState(false);
   const [confirmingDeleteFolder, setConfirmingDeleteFolder] = useState(false);
+  const folderDeleteConfirmationRef = useRef<HTMLDivElement>(null);
   const activeRoomLink = useAtomValue(activeRoomLinkAtom);
 
   useEffect(() => {
-    onCollapseChange?.(collapsed);
-  }, [collapsed, onCollapseChange]);
+    if (confirmingDeleteRoomId) {
+      deleteConfirmationRef.current
+        ?.querySelector<HTMLButtonElement>("button")
+        ?.focus();
+    }
+  }, [confirmingDeleteRoomId]);
+
+  useEffect(() => {
+    if (confirmingDeleteFolder) {
+      folderDeleteConfirmationRef.current
+        ?.querySelector<HTMLButtonElement>("button")
+        ?.focus();
+    }
+  }, [confirmingDeleteFolder]);
 
   useEffect(() => {
     const page = pageRef.current;
@@ -107,7 +143,7 @@ export const RoomsPage = ({
     const previousFocus = page.ownerDocument
       .activeElement as HTMLElement | null;
     const requests = shareRequest;
-    toggleRef.current?.focus();
+    filterRef.current?.focus();
     return () => {
       requests.current++;
       if (
@@ -122,20 +158,39 @@ export const RoomsPage = ({
 
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchRooms(), fetchRoomFolders()]).then(
-      ([result, folderResult]) => {
-        if (!alive) {
-          return;
-        }
-        setRooms(result);
-        setFolders(folderResult);
+    const controller = new ownerWindow.AbortController();
+    const timeout = ownerWindow.setTimeout(() => controller.abort(), 10_000);
+    void readCachedRooms().then((cached) => {
+      if (alive && cached) {
+        setRooms((current) => current ?? cached);
+      }
+    });
+    void readCachedFolders().then((cached) => {
+      if (alive && cached) {
+        setFolders((current) => current ?? cached);
+      }
+    });
+    const roomRequest = fetchRooms(controller.signal).then((result) => {
+      if (alive) {
+        setRooms((current) => result ?? current);
         setLoading(false);
-      },
+      }
+    });
+    const folderRequest = fetchRoomFolders(controller.signal).then((result) => {
+      if (alive) {
+        setFolders((current) => result ?? current);
+        setFoldersLoading(false);
+      }
+    });
+    Promise.all([roomRequest, folderRequest]).finally(() =>
+      ownerWindow.clearTimeout(timeout),
     );
     return () => {
       alive = false;
+      controller.abort();
+      ownerWindow.clearTimeout(timeout);
     };
-  }, []);
+  }, [ownerWindow, setRooms, setFolders]);
 
   useEffect(
     () => () => {
@@ -148,25 +203,62 @@ export const RoomsPage = ({
 
   const refreshRooms = async () => {
     setLoading(true);
-    const [result, folderResult] = await Promise.all([
-      fetchRooms(),
-      fetchRoomFolders(),
-    ]);
-    setRooms(result);
-    setFolders(folderResult);
-    if (folderResult) {
-      setSelectedFolderId((current) =>
-        current === "all" ||
-        current === "unfiled" ||
-        folderResult.some((folder) => folder.id === current)
-          ? current
-          : "all",
-      );
+    setFoldersLoading(true);
+    const controller = new ownerWindow.AbortController();
+    const timeout = ownerWindow.setTimeout(() => controller.abort(), 10_000);
+    try {
+      await Promise.all([
+        fetchRooms(controller.signal).then((result) => {
+          setRooms((current) => result ?? current);
+          setLoading(false);
+        }),
+        fetchRoomFolders(controller.signal).then((folderResult) => {
+          setFolders((current) => folderResult ?? current);
+          setFoldersLoading(false);
+          if (folderResult) {
+            setSelectedFolderId((current) =>
+              current === "all" ||
+              current === "unfiled" ||
+              folderResult.some((folder) => folder.id === current)
+                ? current
+                : "all",
+            );
+          }
+        }),
+      ]);
+    } finally {
+      ownerWindow.clearTimeout(timeout);
     }
-    setLoading(false);
+  };
+
+  const cancelFolder = () => {
+    folderSubmission.current = true;
+    setFolderEditor(null);
+    setActionError(null);
+    ownerWindow.requestAnimationFrame(() => {
+      const target = pageRef.current?.querySelector<HTMLElement>(
+        '[role="treeitem"][tabindex="0"]',
+      );
+      (target ?? filterRef.current)?.focus();
+    });
+  };
+
+  const createFolder = (parentId: string) => {
+    folderSubmission.current = false;
+    setActionError(null);
+    setSearch("");
+    setSelectedFolderId(parentId || "all");
+    setFolderEditor("create");
+    setFolderName("");
+    setFolderParentId(parentId);
+    setConfirmingDeleteFolder(false);
   };
 
   const submitFolder = async () => {
+    if (!folderEditor || folderSubmission.current || !folderName.trim()) {
+      return;
+    }
+    folderSubmission.current = true;
     setFolderBusy(true);
     setActionError(null);
     const folder = await saveRoomFolder(
@@ -184,6 +276,8 @@ export const RoomsPage = ({
       setFolderName("");
     } else {
       setActionError(t("myRooms.folderSaveError"));
+      folderSubmission.current = false;
+      ownerWindow.requestAnimationFrame(() => folderInputRef.current?.focus());
     }
     setFolderBusy(false);
   };
@@ -260,6 +354,9 @@ export const RoomsPage = ({
   };
 
   const editFolder = (folder: RoomFolder) => {
+    folderSubmission.current = false;
+    setActionError(null);
+    setSearch("");
     setSelectedFolderId(folder.id);
     setFolderEditor("rename");
     setFolderName(folder.name);
@@ -294,18 +391,55 @@ export const RoomsPage = ({
     scene: Awaited<ReturnType<NonNullable<CollabAPI>["startCollaboration"]>>,
   ) => {
     if (scene) {
+      const currentElements = api.getSceneElementsIncludingDeleted();
+      const nextElements = scene.elements;
+      const alreadyInstalled =
+        nextElements != null &&
+        nextElements.length === currentElements.length &&
+        nextElements.every(
+          (element, index) => element === currentElements[index],
+        );
+      const currentState = api.getAppState();
+      const restoredAppState = restoreAppState(scene.appState, currentState);
+      const visibleElements = nextElements?.filter(
+        (element) => !element.isDeleted,
+      );
+      const appState =
+        scene.scrollToContent && visibleElements?.length
+          ? zoomToFitBounds({
+              appState: { ...currentState, ...restoredAppState },
+              bounds: getCommonBounds(visibleElements),
+              fit: "contain",
+            }).appState
+          : restoredAppState;
+      if (
+        alreadyInstalled &&
+        Object.entries(scene.appState ?? {}).every(([key, value]) =>
+          key === "zoom"
+            ? currentState.zoom.value === appState.zoom.value
+            : currentState[key as keyof typeof currentState] === value,
+        ) &&
+        currentState.scrollX === appState.scrollX &&
+        currentState.scrollY === appState.scrollY &&
+        currentState.zoom.value === appState.zoom.value
+      ) {
+        return;
+      }
       api.updateScene({
-        elements: restoreElements(scene.elements, null, {
-          repairBindings: true,
-        }),
-        appState: restoreAppState(scene.appState, api.getAppState()),
+        ...(alreadyInstalled ? {} : { elements: nextElements }),
+        appState,
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
     }
   };
 
   const openRoom = async (room: { roomId: string; roomKey: string }) => {
-    if (!collabAPI || !excalidrawAPI || transitionRef.current) {
+    if (
+      !collabAPI ||
+      !excalidrawAPI ||
+      transitionRef.current ||
+      roomDeletionInFlight.current
+    ) {
       return;
     }
     transitionRef.current = true;
@@ -332,12 +466,15 @@ export const RoomsPage = ({
         roomId: room.roomId,
         roomKey: room.roomKey,
       });
+      if (scene?.appState?.errorMessage) {
+        throw new Error(t("roomDialog.error_network"));
+      }
       paintScene(excalidrawAPI, scene);
       if (!collabAPI.isCollaborating()) {
         throw new Error(t("roomDialog.error_network"));
       }
       closeRoomsPage(ownerWindow);
-      await refreshRooms();
+      void refreshRooms();
     } catch {
       stopSilently();
       ownerWindow.history.replaceState({}, APP_NAME, previousURL);
@@ -354,7 +491,12 @@ export const RoomsPage = ({
   };
 
   const createRoom = async () => {
-    if (!collabAPI || !excalidrawAPI || transitionRef.current) {
+    if (
+      !collabAPI ||
+      !excalidrawAPI ||
+      transitionRef.current ||
+      roomDeletionInFlight.current
+    ) {
       return;
     }
     if (
@@ -414,15 +556,41 @@ export const RoomsPage = ({
   };
 
   const confirmDelete = async (room: ServerRoomEntry) => {
-    setConfirmingDeleteRoomId(null);
-    if (await deleteRoom(room.roomId, room.key)) {
-      if (sharingRoomId === room.roomId) {
-        setSharingRoomId(null);
-        setShareCode(null);
+    if (roomDeletionInFlight.current) {
+      return;
+    }
+    roomDeletionInFlight.current = true;
+    setDeletingRoom(true);
+    setActionError(null);
+    try {
+      if (await deleteRoom(room.roomId, room.key)) {
+        setConfirmingDeleteRoomId(null);
+        setRooms(
+          (current) =>
+            current?.filter((entry) => entry.roomId !== room.roomId) ?? null,
+        );
+        const activeLink = appJotaiStore.get(activeRoomLinkAtom);
+        if (
+          activeLink &&
+          getCollaborationLinkData(activeLink)?.roomId === room.roomId
+        ) {
+          stopSilently();
+          ownerWindow.history.replaceState(
+            {},
+            APP_NAME,
+            `${ownerWindow.location.pathname}${ownerWindow.location.search}`,
+          );
+        }
+        if (sharingRoomId === room.roomId) {
+          setSharingRoomId(null);
+          setShareCode(null);
+        }
+      } else {
+        setActionError(t("myRooms.deleteError"));
       }
-      refreshRooms();
-    } else {
-      setActionError(t("myRooms.deleteError"));
+    } finally {
+      roomDeletionInFlight.current = false;
+      setDeletingRoom(false);
     }
   };
 
@@ -490,11 +658,10 @@ export const RoomsPage = ({
   const selectedFolder = folders?.find(
     (folder) => folder.id === selectedFolderId,
   );
-  const folderTree = getFolderTree(folders ?? []);
-  const selectedFolderIds = getFolderDescendantIds(
-    folders ?? [],
-    selectedFolderId,
+  const roomToDelete = rooms?.find(
+    (room) => room.roomId === confirmingDeleteRoomId,
   );
+  const folderTree = getFolderTree(folders ?? []);
   const selectFolder = (id: string) => {
     setSelectedFolderId(id);
     setFolderEditor(null);
@@ -515,15 +682,74 @@ export const RoomsPage = ({
     return t("myRooms.timeAgo.days", { count: Math.floor(hours / 24) });
   };
 
-  const toggleSidebar = () => {
-    setCollapsed((current) => !current);
-    toggleRef.current?.focus();
-  };
+  const explorerToolbar = (
+    <>
+      <button
+        type="button"
+        className="RoomsPage__explorerRoot"
+        onClick={() => selectFolder("all")}
+        aria-label={t("myRooms.allRooms")}
+        title={
+          selectedFolder
+            ? folderTree.find((entry) => entry.folder.id === selectedFolder.id)
+                ?.path
+            : t("myRooms.allRooms")
+        }
+      >
+        {chevronDownIcon}
+        <span className="RoomsPage__workspaceName">
+          {selectedFolder
+            ? folderTree.find((entry) => entry.folder.id === selectedFolder.id)
+                ?.path
+            : t("myRooms.listTitle")}
+        </span>
+        <span className="RoomsPage__treeCount">{rooms?.length ?? 0}</span>
+      </button>
+      <button
+        type="button"
+        className="RoomsPage__actionButton"
+        aria-label={t("myRooms.newFolder")}
+        title={t("myRooms.newFolder")}
+        disabled={folderBusy || transitioning || loading}
+        onClick={() => createFolder(selectedFolder?.id ?? "")}
+      >
+        {LoadIcon}
+        <span className="RoomsPage__iconPlus">+</span>
+      </button>
+      {selectedFolder && (
+        <>
+          <button
+            type="button"
+            className="RoomsPage__actionButton"
+            aria-label={t("myRooms.renameFolder")}
+            title={t("myRooms.renameFolder")}
+            disabled={folderBusy || transitioning}
+            onClick={() => editFolder(selectedFolder)}
+          >
+            {pencilIcon}
+          </button>
+          <button
+            type="button"
+            className="RoomsPage__actionButton"
+            aria-label={t("myRooms.deleteFolder")}
+            title={t("myRooms.deleteFolder")}
+            disabled={folderBusy || transitioning}
+            onClick={() => {
+              setConfirmingDeleteFolder(true);
+              setFolderEditor(null);
+            }}
+          >
+            {TrashIcon}
+          </button>
+        </>
+      )}
+    </>
+  );
 
   return (
     <div
       ref={pageRef}
-      className={`RoomsPage${collapsed ? " RoomsPage--collapsed" : ""}`}
+      className="RoomsPage"
       role="complementary"
       aria-label={t("myRooms.title")}
       aria-busy={transitioning || folderBusy}
@@ -534,78 +760,97 @@ export const RoomsPage = ({
         }
       }}
     >
-      <div className="RoomsPage__rail">
-        <button
-          ref={toggleRef}
-          type="button"
-          className="RoomsPage__toggle"
-          aria-label={t(
-            collapsed ? "myRooms.expandSidebar" : "myRooms.collapseSidebar",
-          )}
-          title={t(
-            collapsed ? "myRooms.expandSidebar" : "myRooms.collapseSidebar",
-          )}
-          aria-expanded={!collapsed}
-          aria-controls="rooms-sidebar-content"
-          onClick={toggleSidebar}
-        >
-          {collapsed ? sidebarRightIcon : chevronRight}
-        </button>
-        <span className="RoomsPage__railTitle" aria-hidden="true">
-          {t("myRooms.listTitle")}
-        </span>
-      </div>
-      <div
-        className="RoomsPage__inner"
-        id="rooms-sidebar-content"
-        hidden={collapsed}
-      >
+      <div className="RoomsPage__inner" id="rooms-sidebar-content">
         <div className="RoomsPage__header">
-          <h2 className="RoomsPage__title">{t("myRooms.title")}</h2>
+          <h2 className="RoomsPage__title">{t("myRooms.explorer")}</h2>
           <div className="RoomsPage__actions">
-            <FilledButton
-              size="medium"
-              label={t("myRooms.newEmptyRoom")}
-              icon={PlusIcon}
+            <button
+              type="button"
+              className="RoomsPage__actionButton"
+              aria-label={t("myRooms.newEmptyRoom")}
+              title={t("myRooms.newEmptyRoom")}
               onClick={createRoom}
               disabled={transitioning || !collabAPI || !excalidrawAPI}
-              status={transitioning ? "loading" : null}
-            />
+            >
+              {PlusIcon}
+            </button>
+            <button
+              type="button"
+              className="RoomsPage__actionButton"
+              aria-label={t("myRooms.joinTitle")}
+              title={t("myRooms.joinTitle")}
+              aria-expanded={joinVisible}
+              onClick={() => setJoinVisible((current) => !current)}
+            >
+              {LinkIcon}
+            </button>
             {collaborating && (
-              <FilledButton
-                size="medium"
-                variant="outlined"
-                color="danger"
-                label={t("myRooms.leaveSession")}
-                icon={playerStopFilledIcon}
+              <button
+                type="button"
+                className="RoomsPage__actionButton"
+                aria-label={t("myRooms.leaveSession")}
+                title={t("myRooms.leaveSession")}
                 onClick={leaveSession}
-              />
+              >
+                {playerStopFilledIcon}
+              </button>
             )}
           </div>
-          <button
-            type="button"
-            className="RoomsPage__close"
-            aria-label={t("myRooms.close")}
-            title={t("myRooms.close")}
-            onClick={close}
-          >
-            {CloseIcon}
-          </button>
         </div>
 
-        {actionError && (
+        {actionError && !folderEditor && (
           <div className="RoomsPage__error" role="alert">
             {actionError}
           </div>
         )}
 
-        <details className="RoomsPage__join">
-          <summary>{t("myRooms.joinTitle")}</summary>
-          <JoinRoom onJoin={openRoom} disabled={transitioning} />
-        </details>
+        {joinVisible && (
+          <div className="RoomsPage__join">
+            <JoinRoom onJoin={openRoom} disabled={transitioning} />
+          </div>
+        )}
 
         <div className="RoomsPage__section">
-          {!loading && folders === null && (
+          {roomToDelete && (
+            <div
+              className="RoomsPage__deleteConfirmation"
+              ref={deleteConfirmationRef}
+              role="alertdialog"
+              aria-modal="false"
+              aria-label={t("myRooms.delete")}
+              aria-describedby="rooms-delete-message"
+              onKeyDown={(event) => {
+                if (event.key === KEYS.ESCAPE && !deletingRoom) {
+                  event.stopPropagation();
+                  setConfirmingDeleteRoomId(null);
+                }
+              }}
+            >
+              <p id="rooms-delete-message">
+                {t("myRooms.confirmDeleteRoom", {
+                  name: roomToDelete.name || roomToDelete.roomId,
+                })}
+              </p>
+              <div className="RoomsPage__actions">
+                <FilledButton
+                  label={t("myRooms.delete")}
+                  color="danger"
+                  disabled={deletingRoom}
+                  onClick={() => confirmDelete(roomToDelete)}
+                />
+                <FilledButton
+                  label={t("myRooms.cancelFolder")}
+                  variant="outlined"
+                  disabled={deletingRoom}
+                  onClick={() => {
+                    setConfirmingDeleteRoomId(null);
+                    setActionError(null);
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {!foldersLoading && folders === null && (
             <div className="RoomsPage__error" role="alert">
               {t("myRooms.foldersLoadingError")}
               <FilledButton label={t("myRooms.retry")} onClick={refreshRooms} />
@@ -613,131 +858,24 @@ export const RoomsPage = ({
           )}
           {folders !== null && (
             <>
-              <div className="RoomsPage__folderToolbar">
-                <button
-                  type="button"
-                  className="RoomsPage__explorerRoot"
-                  onClick={() => selectFolder("all")}
-                  aria-label={t("myRooms.allRooms")}
-                >
-                  {selectedFolder
-                    ? folderTree.find(
-                        (entry) => entry.folder.id === selectedFolder.id,
-                      )?.path
-                    : t("myRooms.listTitle")}
-                  <span>{rooms?.length ?? 0}</span>
-                </button>
-                <FilledButton
-                  label={t("myRooms.newFolder")}
-                  icon={PlusIcon}
-                  disabled={folderBusy || transitioning || loading}
-                  onClick={() => {
-                    setFolderEditor("create");
-                    setFolderName("");
-                    setFolderParentId(selectedFolder?.id ?? "");
-                    setConfirmingDeleteFolder(false);
-                  }}
-                />
-                {selectedFolder && (
-                  <>
-                    <button
-                      type="button"
-                      className="RoomsPage__actionButton"
-                      aria-label={t("myRooms.renameFolder")}
-                      title={t("myRooms.renameFolder")}
-                      disabled={folderBusy || transitioning || loading}
-                      onClick={() => editFolder(selectedFolder)}
-                    >
-                      {pencilIcon}
-                    </button>
-                    <button
-                      type="button"
-                      className="RoomsPage__actionButton RoomsPage__actionButton--delete"
-                      aria-label={t("myRooms.deleteFolder")}
-                      title={t("myRooms.deleteFolder")}
-                      disabled={folderBusy || transitioning || loading}
-                      onClick={() => {
-                        setConfirmingDeleteFolder(true);
-                        setFolderEditor(null);
-                      }}
-                    >
-                      {TrashIcon}
-                    </button>
-                  </>
-                )}
-              </div>
-              {folderEditor && (
-                <form
-                  className="RoomsPage__folderToolbar"
-                  onKeyDown={(event) => {
-                    if (event.key === KEYS.ESCAPE) {
-                      event.stopPropagation();
-                      if (!folderBusy) {
-                        setFolderEditor(null);
-                      }
-                    }
-                  }}
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (folderName.trim() && !folderBusy) {
-                      submitFolder();
-                    }
-                  }}
-                >
-                  <label className="RoomsPage__folderField">
-                    {t("myRooms.folderName")}
-                    <input
-                      className="RoomsPage__editInput"
-                      value={folderName}
-                      maxLength={64}
-                      autoFocus
-                      disabled={folderBusy}
-                      onChange={(event) => setFolderName(event.target.value)}
-                    />
-                  </label>
-                  <div className="RoomsPage__folderField">
-                    <span>{t("myRooms.parentFolder")}</span>
-                    <FolderMenu
-                      label={t("myRooms.parentFolder")}
-                      value={folderParentId}
-                      disabled={folderBusy}
-                      onChange={setFolderParentId}
-                      options={[
-                        { value: "", label: t("myRooms.topLevel") },
-                        ...folderTree
-                          .filter(
-                            ({ folder }) =>
-                              folderEditor !== "rename" ||
-                              !selectedFolderIds.has(folder.id),
-                          )
-                          .map(({ folder, path, depth }) => ({
-                            value: folder.id,
-                            label: path,
-                            depth,
-                          })),
-                      ]}
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    className="RoomsPage__actionButton"
-                    disabled={!folderName.trim() || folderBusy}
-                  >
-                    {t("myRooms.saveFolder")}
-                  </button>
-                  <button
-                    type="button"
-                    className="RoomsPage__actionButton"
-                    disabled={folderBusy}
-                    onClick={() => setFolderEditor(null)}
-                  >
-                    {t("myRooms.cancelFolder")}
-                  </button>
-                </form>
-              )}
               {confirmingDeleteFolder && (
-                <div className="RoomsPage__folderToolbar">
-                  <span>{t("myRooms.confirmDeleteFolder")}</span>
+                <div
+                  className="RoomsPage__folderToolbar"
+                  ref={folderDeleteConfirmationRef}
+                  role="alertdialog"
+                  aria-modal="false"
+                  aria-label={t("myRooms.deleteFolder")}
+                  aria-describedby="rooms-delete-folder-message"
+                  onKeyDown={(event) => {
+                    if (event.key === KEYS.ESCAPE && !folderBusy) {
+                      event.stopPropagation();
+                      setConfirmingDeleteFolder(false);
+                    }
+                  }}
+                >
+                  <span id="rooms-delete-folder-message">
+                    {t("myRooms.confirmDeleteFolder")}
+                  </span>
                   <FilledButton
                     label={t("myRooms.deleteFolder")}
                     color="danger"
@@ -754,14 +892,17 @@ export const RoomsPage = ({
               )}
             </>
           )}
-          <TextField
-            label={t("myRooms.search")}
+          <input
+            ref={filterRef}
+            className="RoomsPage__filter"
+            aria-label={t("myRooms.search")}
+            placeholder={t("myRooms.search")}
             type="search"
-            fullWidth
             value={search}
-            onChange={setSearch}
+            disabled={folderBusy}
+            onChange={(event) => setSearch(event.currentTarget.value)}
           />
-          {loading && (
+          {loading && rooms === null && (
             <div className="RoomsPage__empty" role="status">
               {t("myRooms.loading")}
             </div>
@@ -772,18 +913,188 @@ export const RoomsPage = ({
               <FilledButton label={t("myRooms.retry")} onClick={refreshRooms} />
             </div>
           )}
-          {!loading && rooms !== null && (
+          {rooms !== null && (
             <RoomExplorer
+              toolbar={explorerToolbar}
+              activeRoomId={currentRoom?.roomId}
+              folderDraft={
+                folderEditor === "create"
+                  ? { parentId: folderParentId || undefined }
+                  : undefined
+              }
+              editingFolderId={
+                folderEditor === "rename" ? selectedFolderId : undefined
+              }
+              renderFolderEditor={() => (
+                <div className="RoomsPage__folderEdit">
+                  <input
+                    ref={folderInputRef}
+                    className="RoomsPage__editInput"
+                    aria-label={t("myRooms.folderName")}
+                    aria-invalid={!!actionError}
+                    aria-describedby={
+                      actionError ? "rooms-folder-error" : undefined
+                    }
+                    maxLength={64}
+                    autoFocus
+                    onFocus={(event) => event.currentTarget.select()}
+                    disabled={folderBusy}
+                    value={folderName}
+                    onChange={(event) => {
+                      setFolderName(event.currentTarget.value);
+                      setActionError(null);
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === KEYS.ENTER) {
+                        event.preventDefault();
+                        submitFolder();
+                      } else if (event.key === KEYS.ESCAPE) {
+                        event.preventDefault();
+                        cancelFolder();
+                      }
+                    }}
+                    onBlur={() => {
+                      if (folderSubmission.current) {
+                        return;
+                      }
+                      if (folderName.trim()) {
+                        submitFolder();
+                      } else {
+                        cancelFolder();
+                      }
+                    }}
+                  />
+                  {actionError && (
+                    <div
+                      className="RoomsPage__folderEditError"
+                      id="rooms-folder-error"
+                      role="alert"
+                    >
+                      {actionError}
+                    </div>
+                  )}
+                </div>
+              )}
               folders={folders ?? []}
               rooms={rooms}
               search={search}
               selectedFolderId={selectedFolderId}
-              disabled={folderBusy || transitioning || loading}
+              disabled={
+                folderBusy ||
+                transitioning ||
+                (loading && rooms === null) ||
+                deletingRoom
+              }
               onSelectFolder={selectFolder}
               onMoveRoom={moveRoom}
               onMoveFolder={moveFolder}
               onRenameFolder={editFolder}
               onRenameRoom={(room) => setEditingRoomId(room.roomId)}
+              onOpenRoom={(room) => {
+                if (currentRoom?.roomId !== room.roomId) {
+                  openRoom({ roomId: room.roomId, roomKey: room.key });
+                }
+              }}
+              renderContextMenu={({ folder, room }) => (
+                <ContextMenu.Content
+                  className="RoomsPage__contextMenu"
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  {folder && (
+                    <>
+                      <ContextMenu.Item
+                        className="RoomsPage__contextItem"
+                        disabled={folderBusy || transitioning}
+                        onSelect={() => createFolder(folder.id)}
+                      >
+                        {t("myRooms.newFolder")}
+                      </ContextMenu.Item>
+                      <ContextMenu.Item
+                        className="RoomsPage__contextItem"
+                        disabled={folderBusy || transitioning}
+                        onSelect={() => editFolder(folder)}
+                      >
+                        {t("myRooms.renameFolder")}
+                      </ContextMenu.Item>
+                      <ContextMenu.Item
+                        className="RoomsPage__contextItem"
+                        disabled={folderBusy || transitioning}
+                        onSelect={() => {
+                          selectFolder(folder.id);
+                          setConfirmingDeleteFolder(true);
+                        }}
+                      >
+                        {t("myRooms.deleteFolder")}
+                      </ContextMenu.Item>
+                    </>
+                  )}
+                  {room && (
+                    <>
+                      <ContextMenu.Item
+                        className="RoomsPage__contextItem"
+                        disabled={transitioning || !collabAPI || !excalidrawAPI}
+                        onSelect={() =>
+                          openRoom({ roomId: room.roomId, roomKey: room.key })
+                        }
+                      >
+                        {t("myRooms.open")}
+                      </ContextMenu.Item>
+                      <ContextMenu.Item
+                        className="RoomsPage__contextItem"
+                        disabled={folderBusy || transitioning}
+                        onSelect={() => setEditingRoomId(room.roomId)}
+                      >
+                        {t("myRooms.rename")}
+                      </ContextMenu.Item>
+                      <ContextMenu.Item
+                        className="RoomsPage__contextItem"
+                        disabled={folderBusy || transitioning}
+                        onSelect={() => toggleShare(room)}
+                      >
+                        {t("myRooms.share")}
+                      </ContextMenu.Item>
+                      <ContextMenu.Sub>
+                        <ContextMenu.SubTrigger
+                          className="RoomsPage__contextItem"
+                          disabled={folderBusy || transitioning}
+                        >
+                          {t("myRooms.moveToFolder", {
+                            name: room.name || room.roomId,
+                          })}
+                        </ContextMenu.SubTrigger>
+                        <ContextMenu.SubContent className="RoomsPage__contextMenu">
+                          <ContextMenu.Item
+                            className="RoomsPage__contextItem"
+                            onSelect={() => moveRoom(room, "")}
+                          >
+                            {t("myRooms.unfiled")}
+                          </ContextMenu.Item>
+                          {folderTree.map(({ folder: target, path }) => (
+                            <ContextMenu.Item
+                              key={target.id}
+                              className="RoomsPage__contextItem"
+                              onSelect={() => moveRoom(room, target.id)}
+                            >
+                              {path}
+                            </ContextMenu.Item>
+                          ))}
+                        </ContextMenu.SubContent>
+                      </ContextMenu.Sub>
+                      <ContextMenu.Item
+                        className="RoomsPage__contextItem"
+                        disabled={folderBusy || transitioning}
+                        onSelect={() => {
+                          setEditingRoomId(null);
+                          setConfirmingDeleteRoomId(room.roomId);
+                        }}
+                      >
+                        {t("myRooms.delete")}
+                      </ContextMenu.Item>
+                    </>
+                  )}
+                </ContextMenu.Content>
+              )}
               renderRoom={(room) => {
                 const isActive = currentRoom?.roomId === room.roomId;
                 const isEditing = editingRoomId === room.roomId;
@@ -862,26 +1173,26 @@ export const RoomsPage = ({
                         )}
                       </span>
                     </div>
-                    {folders !== null && folders.length > 0 && (
-                      <FolderMenu
-                        compact
-                        label={t("myRooms.moveToFolder", {
-                          name: room.name || room.roomId,
-                        })}
-                        value={room.folderId ?? ""}
-                        disabled={folderBusy || transitioning || loading}
-                        onChange={(value) => moveRoom(room, value)}
-                        options={[
-                          { value: "", label: t("myRooms.unfiled") },
-                          ...folderTree.map(({ folder, path, depth }) => ({
-                            value: folder.id,
-                            label: path,
-                            depth,
-                          })),
-                        ]}
-                      />
-                    )}
                     <div className="RoomsPage__rowActions">
+                      {folders !== null && folders.length > 0 && (
+                        <FolderMenu
+                          compact
+                          label={t("myRooms.moveToFolder", {
+                            name: room.name || room.roomId,
+                          })}
+                          value={room.folderId ?? ""}
+                          disabled={folderBusy || transitioning || loading}
+                          onChange={(value) => moveRoom(room, value)}
+                          options={[
+                            { value: "", label: t("myRooms.unfiled") },
+                            ...folderTree.map(({ folder, path, depth }) => ({
+                              value: folder.id,
+                              label: path,
+                              depth,
+                            })),
+                          ]}
+                        />
+                      )}
                       {!isEditing && (
                         <button
                           type="button"
@@ -902,7 +1213,7 @@ export const RoomsPage = ({
                         className="RoomsPage__actionButton"
                         title={t("myRooms.share")}
                         aria-label={t("myRooms.share")}
-                        disabled={transitioning || folderBusy}
+                        disabled={transitioning || folderBusy || deletingRoom}
                         onClick={() => toggleShare(room)}
                       >
                         {share}
@@ -916,19 +1227,13 @@ export const RoomsPage = ({
                         }`}
                         title={t("myRooms.delete")}
                         aria-label={t("myRooms.delete")}
-                        disabled={transitioning || folderBusy}
+                        disabled={transitioning || folderBusy || deletingRoom}
                         onClick={() => {
-                          if (isConfirmingDelete) {
-                            confirmDelete(room);
-                          } else {
-                            setEditingRoomId(null);
-                            setConfirmingDeleteRoomId(room.roomId);
-                          }
+                          setEditingRoomId(null);
+                          setConfirmingDeleteRoomId(room.roomId);
                         }}
                       >
-                        {isConfirmingDelete
-                          ? t("myRooms.confirmDelete")
-                          : TrashIcon}
+                        {TrashIcon}
                       </button>
                     </div>
                     {isSharing && (

@@ -439,6 +439,7 @@
     "shareTitle": "Join a live collaboration session on Excalidraw"
   },
   "myRooms": {
+    "explorer": "Rooms Explorer",
     "title": "My rooms",
     "expandSidebar": "Expand rooms sidebar",
     "collapseSidebar": "Collapse rooms sidebar",
@@ -475,11 +476,13 @@
     "loading": "Loading rooms…",
     "retry": "Retry",
     "offline": "Offline — waiting to sync changes",
+    "checking": "Checking for updates…",
     "loadingError": "Couldn't load your rooms. Check your connection.",
     "registerError": "Couldn't register the room on the server.",
     "rename": "Rename",
     "delete": "Delete",
     "confirmDelete": "Sure?",
+    "confirmDeleteRoom": "Delete room ‘{{name}}’ and its saved drawing? This cannot be undone.",
     "renamePlaceholder": "Room name",
     "renameError": "Couldn't rename the room.",
     "deleteError": "Couldn't delete the room.",

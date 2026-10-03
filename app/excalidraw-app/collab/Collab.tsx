@@ -6,6 +6,7 @@ import {
   reconcileElements,
 } from "@excalidraw/excalidraw";
 import { ErrorDialog } from "@excalidraw/excalidraw/components/ErrorDialog";
+import { ExcalidrawContainerContext } from "@excalidraw/excalidraw/components/App";
 import { APP_NAME, cloneJSON, EVENT, toBrandedType } from "@excalidraw/common";
 import {
   IDLE_THRESHOLD,
@@ -20,7 +21,7 @@ import {
   type ResolvablePromise,
 } from "@excalidraw/common";
 import { decryptData } from "@excalidraw/excalidraw/data/encryption";
-import { getVisibleSceneBounds } from "@excalidraw/element";
+import { getCommonBounds, getVisibleSceneBounds } from "@excalidraw/element";
 import { newElementWith } from "@excalidraw/element";
 import { isImageElement, isInitializedImageElement } from "@excalidraw/element";
 import { AbortError } from "@excalidraw/excalidraw/errors";
@@ -45,6 +46,7 @@ import type {
 } from "@excalidraw/element/types";
 import type {
   BinaryFileData,
+  AppState,
   ExcalidrawImperativeAPI,
   SocketId,
   Collaborator,
@@ -91,15 +93,28 @@ import {
 } from "../data/localStorage";
 import {
   isSavedToServer,
+  clearRoomSceneCache,
   loadRoomFromServer,
   registerRoom,
   saveRoomToServer,
 } from "../data/rooms";
 import { resetBrowserStateVersions } from "../data/tabSync";
+import {
+  cacheRoomFiles,
+  getRoomCacheGeneration,
+  getRoomFileCacheGeneration,
+  getRoomChanges,
+  readCachedRoomFiles,
+  readCachedRoomScene,
+  readRoomDraft,
+  saveRoomDraft,
+} from "../data/roomCache";
+import { loadRoomFiles } from "../data/roomFiles";
 
 import { collabErrorIndicatorAtom } from "./CollabError";
 import Portal from "./Portal";
 
+import type { ContextType } from "react";
 import type {
   SocketUpdateDataSource,
   SyncableExcalidrawElement,
@@ -108,6 +123,7 @@ import type {
 export const collabAPIAtom = atom<CollabAPI | null>(null);
 export const isCollaboratingAtom = atom(false);
 export const isOfflineAtom = atom(false);
+export const roomValidationPendingAtom = atom(false);
 // Set when a room join finds no server (offline boot): the canvas keeps
 // local-only work and local persistence resumes. Silent — no banner.
 // Cleared on the first successful server contact.
@@ -178,7 +194,18 @@ interface CollabProps {
   excalidrawAPI: ExcalidrawImperativeAPI;
 }
 
+type PreparedRoomScene = {
+  elements: readonly OrderedExcalidrawElement[];
+  viewport: Pick<AppState, "scrollX" | "scrollY" | "zoom">;
+  baseline: readonly SyncableExcalidrawElement[] | null | undefined;
+  files: BinaryFileData[];
+  fileGeneration: number;
+  generation: number;
+};
+
 class Collab extends PureComponent<CollabProps, CollabState> {
+  static contextType = ExcalidrawContainerContext;
+  declare context: ContextType<typeof ExcalidrawContainerContext>;
   portal: Portal;
   fileManager: FileManager;
   excalidrawAPI: CollabProps["excalidrawAPI"];
@@ -186,6 +213,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   idleTimeoutId: number | null;
 
   private socketInitializationTimer?: number;
+  private roomLoadController: AbortController | null = null;
   // True while the initial scene promise is already spent (empty) but an
   // offline canvas may still receive its scene late: late arrivals must
   // paint directly instead of relying on resolve(). Set on offline entry,
@@ -203,6 +231,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     | null
   > | null = null;
   private pendingSceneRoomId: string | null = null;
+  private pendingSceneRoomKey: string | null = null;
+  private roomStartGeneration = 0;
+  private preparedRoomScenes = new Map<string, PreparedRoomScene>();
   private lastBroadcastedOrReceivedSceneVersion: number = -1;
   private collaborators = new Map<SocketId, Collaborator>();
   /** the socket ids of the users following the current user */
@@ -220,12 +251,40 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.fileManager = new FileManager({
       onFileStatusChange: FileStatusStore.updateStatuses.bind(FileStatusStore),
       getFiles: async (fileIds) => {
-        const { roomId, roomKey } = this.portal;
+        const { roomId, roomKey, socket } = this.portal;
         if (!roomId || !roomKey) {
           throw new AbortError();
         }
 
-        return loadFilesFromFirebase(`files/rooms/${roomId}`, roomKey, fileIds);
+        const result = await loadRoomFiles({
+          roomId,
+          roomKey,
+          fileIds,
+          skipCache: this.excalidrawAPI
+            .getSceneElementsIncludingDeleted()
+            .filter(isInitializedImageElement)
+            .filter((element) => element.status !== "saved")
+            .map((element) => element.fileId),
+          download: (missing) =>
+            loadFilesFromFirebase(`files/rooms/${roomId}`, roomKey, missing),
+          onCachedFiles: (files) => {
+            if (
+              this.portal.socket === socket &&
+              this.portal.roomId === roomId &&
+              this.portal.roomKey === roomKey
+            ) {
+              this.excalidrawAPI.addFiles(files);
+            }
+          },
+        });
+        if (
+          this.portal.socket !== socket ||
+          this.portal.roomId !== roomId ||
+          this.portal.roomKey !== roomKey
+        ) {
+          throw new AbortError();
+        }
+        return result;
       },
       saveFiles: async ({ addedFiles }) => {
         const { roomId, roomKey } = this.portal;
@@ -233,6 +292,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           throw new AbortError();
         }
 
+        await cacheRoomFiles(roomId, roomKey, [...addedFiles.values()]);
         const { savedFiles, erroredFiles } = await saveFilesToFirebase({
           prefix: `${FIREBASE_STORAGE_PREFIXES.collabFiles}/${roomId}`,
           files: await encodeFilesForUpload({
@@ -349,8 +409,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private offlineRejoinInFlight = false;
+  private cachedRoomBaseline: readonly SyncableExcalidrawElement[] | null =
+    null;
 
   private onVisibilityRetry = () => {
+    if (this.context.container?.ownerDocument.visibilityState === "visible") {
+      this.preparedRoomScenes.clear();
+      clearRoomSceneCache();
+    }
     if (
       document.visibilityState === "visible" &&
       appJotaiStore.get(offlineRoomPendingAtom)
@@ -381,12 +447,28 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private saveRoomBackupThrottled = throttle(
-    async (roomId: string, elements: readonly SyncableExcalidrawElement[]) => {
+    async (
+      roomId: string,
+      roomKey: string,
+      elements: readonly SyncableExcalidrawElement[],
+    ) => {
       if (!elements.length) {
         return;
       }
       try {
-        await saveRoomBackup(localStorage, roomId, elements);
+        const generation = this.roomStartGeneration;
+        const savingDraft = saveRoomDraft(roomId, roomKey, elements);
+        if (this.portal.roomId === roomId && this.portal.roomKey === roomKey) {
+          await cacheRoomFiles(
+            roomId,
+            roomKey,
+            Object.values(this.excalidrawAPI.getFiles()),
+          );
+        }
+        await savingDraft;
+        if (this.roomStartGeneration === generation) {
+          await saveRoomBackup(localStorage, roomId, elements);
+        }
       } catch (error) {
         console.error("room backup save failed", error);
       }
@@ -456,6 +538,20 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   componentWillUnmount() {
+    this.saveRoomBackupThrottled.flush();
+    this.saveRoomBackupThrottled.cancel();
+    this.queueBroadcastAllElements.cancel();
+    this.queueSaveToFirebase.cancel();
+    this.loadImageFiles.cancel();
+    this.destroySocketClient({ isUnload: true });
+    if (
+      appJotaiStore.get(collabAPIAtom)?.startCollaboration ===
+      this.startCollaboration
+    ) {
+      this.clearOfflinePending();
+      this.setIsCollaborating(false);
+      appJotaiStore.set(collabAPIAtom, null);
+    }
     window.removeEventListener("online", this.onOfflineStatusToggle);
     window.removeEventListener("offline", this.onOfflineStatusToggle);
     if (this.offlineRetryTimer) {
@@ -536,14 +632,39 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     // server hasn't seen merged yet — pushing it now would overwrite the
     // good snapshot with a partial one. The merged scene saves itself once
     // recovery paints (plus the empty-overwrite guards still apply).
-    if (this.offlineRecoveryPending) {
+    if (this.offlineRecoveryPending || !this.portal.socketInitialized) {
       return;
     }
     syncableElements = cloneJSON(syncableElements);
     // self-hosted fork: mirror every save to the /api/rooms registry (always
     // on, unlike the env-gated firebase save below). Fire-and-forget —
     // failures are console-only and must never block collab.
-    saveRoomToServer(this.portal, syncableElements);
+    const { socket, roomId, roomKey } = this.portal;
+    void saveRoomToServer(this.portal, syncableElements, {
+      onConflict: (latest, baseline) => {
+        if (
+          this.portal.socket !== socket ||
+          this.portal.roomId !== roomId ||
+          this.portal.roomKey !== roomKey ||
+          this.offlineRecoveryPending
+        ) {
+          return;
+        }
+        const reconciled = reconcileElements(
+          restoreElements(latest, null, { repairBindings: true }),
+          toBrandedType<readonly RemoteExcalidrawElement[]>(
+            getRoomChanges(
+              baseline,
+              getSyncableElements(this.getSceneElementsIncludingDeleted()),
+            ),
+          ),
+          this.excalidrawAPI.getAppState(),
+        );
+        this.setLastBroadcastedOrReceivedSceneVersion(getSceneVersion(latest));
+        this.handleRemoteSceneUpdate(reconciled);
+        this.syncElements(reconciled);
+      },
+    });
     try {
       const storedElements = await saveToFirebase(
         this.portal,
@@ -584,14 +705,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   stopCollaboration = (keepRemoteState = true) => {
     // Leaving abandons any pending offline recovery for the old room.
-    this.clearOfflinePending();
     // Persist the old room's last strokes before tearing down, so a quick
     // room switch doesn't drop them from the crash backup.
     try {
       (this.saveRoomBackupThrottled as { flush?: () => void }).flush?.();
+      this.saveRoomBackupThrottled.cancel();
     } catch {
       // ignore — backup is best-effort
     }
+    this.rememberPreparedRoom();
     this.queueBroadcastAllElements.cancel();
     this.queueSaveToFirebase.cancel();
     this.loadImageFiles.cancel();
@@ -602,6 +724,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         this.excalidrawAPI.getSceneElementsIncludingDeleted(),
       ),
     );
+    this.clearOfflinePending();
 
     if (this.portal.socket && this.fallbackInitializationHandler) {
       this.portal.socket.off(
@@ -640,6 +763,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private destroySocketClient = (opts?: { isUnload: boolean }) => {
+    this.roomStartGeneration++;
+    this.roomLoadController?.abort();
+    this.roomLoadController = null;
+    window.clearTimeout(this.socketInitializationTimer);
+    this.pendingScenePromise?.resolve(null);
+    this.pendingScenePromise = null;
+    this.pendingSceneRoomId = null;
+    this.pendingSceneRoomKey = null;
     this.lastBroadcastedOrReceivedSceneVersion = -1;
     this.portal.close();
     this.fileManager.reset();
@@ -681,7 +812,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       })
       .map((element) => (element as InitializedExcalidrawImageElement).fileId);
 
-    return await this.fileManager.getFiles(unfetchedImages);
+    try {
+      return await this.fileManager.getFiles(unfetchedImages);
+    } catch (error) {
+      if (error instanceof AbortError) {
+        return { loadedFiles: [], erroredFiles: new Map<FileId, true>() };
+      }
+      throw error;
+    }
   };
 
   private decryptPayload = async (
@@ -717,14 +855,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       });
     }
 
+    if (
+      this.pendingScenePromise &&
+      existingRoomLinkData &&
+      this.pendingSceneRoomId === existingRoomLinkData.roomId &&
+      this.pendingSceneRoomKey === existingRoomLinkData.roomKey
+    ) {
+      return this.pendingScenePromise;
+    }
     if (this.portal.socket) {
-      if (
-        this.pendingScenePromise &&
-        existingRoomLinkData &&
-        this.pendingSceneRoomId === existingRoomLinkData.roomId
-      ) {
-        return this.pendingScenePromise;
-      }
       return null;
     }
 
@@ -753,13 +892,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     // fall back to the historical null behavior.
     this.pendingScenePromise = scenePromise;
     this.pendingSceneRoomId = existingRoomLinkData?.roomId ?? null;
+    this.pendingSceneRoomKey = existingRoomLinkData?.roomKey ?? null;
     const clearPendingScene = () => {
       if (this.pendingScenePromise === scenePromise) {
         this.pendingScenePromise = null;
         this.pendingSceneRoomId = null;
+        this.pendingSceneRoomKey = null;
       }
     };
-    scenePromise.then(clearPendingScene, clearPendingScene);
 
     this.setIsCollaborating(true);
     // Pause local persistence BEFORE any await: a room boot must never
@@ -767,6 +907,235 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     // must survive from the first millisecond.
     LocalData.pauseSave("collaboration");
 
+    const generation = ++this.roomStartGeneration;
+    this.portal.roomId = roomId;
+    this.portal.roomKey = roomKey;
+    this.setActiveRoomLink(window.location.href);
+    if (existingRoomLinkData && !this.offlineRecoveryPending) {
+      this.resetRoomScene();
+    }
+    const cachedPreview = existingRoomLinkData
+      ? this.restoreCachedRoom(
+          existingRoomLinkData,
+          generation,
+          scenePromise,
+        ).catch((error) => console.error("Cached room preview failed", error))
+      : Promise.resolve();
+    void this.startRoomConnection({
+      roomId,
+      roomKey,
+      existingRoomLinkData,
+      scenePromise,
+      generation,
+      cachedPreview,
+    })
+      .catch((error) => {
+        if (this.roomStartGeneration !== generation) {
+          return;
+        }
+        console.error("Room connection failed", error);
+        this.enterOfflineRoomMode({ roomId, roomKey });
+        scenePromise.resolve(null);
+      })
+      .finally(clearPendingScene);
+    return scenePromise;
+  };
+
+  private restoreCachedRoom = async (
+    room: { roomId: string; roomKey: string },
+    generation: number,
+    scenePromise: NonNullable<Collab["pendingScenePromise"]>,
+  ) => {
+    if (
+      this.offlineRecoveryPending ||
+      import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE === "true"
+    ) {
+      return;
+    }
+    const cacheKey = JSON.stringify([room.roomId, room.roomKey]);
+    const prepared = this.preparedRoomScenes.get(cacheKey);
+    let restored: readonly OrderedExcalidrawElement[];
+    let viewport: PreparedRoomScene["viewport"] | undefined;
+    let preparedFiles: BinaryFileData[] | undefined;
+    if (
+      prepared &&
+      prepared.baseline !== undefined &&
+      prepared.generation === getRoomCacheGeneration(room.roomId, room.roomKey)
+    ) {
+      this.preparedRoomScenes.delete(cacheKey);
+      this.preparedRoomScenes.set(cacheKey, prepared);
+      this.cachedRoomBaseline = prepared.baseline;
+      restored = prepared.elements;
+      viewport = prepared.viewport;
+      if (
+        prepared.fileGeneration ===
+        getRoomFileCacheGeneration(room.roomId, room.roomKey)
+      ) {
+        preparedFiles = prepared.files;
+      }
+    } else {
+      viewport = prepared?.viewport;
+      this.preparedRoomScenes.delete(cacheKey);
+      const [cached, draft] = await Promise.all([
+        readCachedRoomScene(room.roomId, room.roomKey),
+        readRoomDraft(room.roomId, room.roomKey),
+      ]);
+      const backup = draft
+        ? null
+        : await readRoomBackup(localStorage, room.roomId);
+      if (
+        this.roomStartGeneration !== generation ||
+        (!cached && !draft?.length)
+      ) {
+        return;
+      }
+      this.cachedRoomBaseline = cached?.elements ?? null;
+      restored = reconcileElements(
+        restoreElements(
+          mergeBackupWithServer(draft ?? backup ?? [], cached?.elements ?? []),
+          null,
+          { repairBindings: true },
+        ),
+        this.excalidrawAPI.getSceneElementsIncludingDeleted() as readonly RemoteExcalidrawElement[],
+        this.excalidrawAPI.getAppState(),
+      );
+      const visibleElements = restored.filter((element) => !element.isDeleted);
+      if (!viewport && visibleElements.length) {
+        const fitted = zoomToFitBounds({
+          appState: this.excalidrawAPI.getAppState(),
+          bounds: getCommonBounds(visibleElements),
+          fit: "contain",
+        }).appState;
+        viewport = {
+          scrollX: fitted.scrollX,
+          scrollY: fitted.scrollY,
+          zoom: fitted.zoom,
+        };
+      }
+    }
+    if (this.roomStartGeneration !== generation) {
+      return;
+    }
+    this.offlineRecoveryPending = true;
+    appJotaiStore.set(roomValidationPendingAtom, true);
+    this.setLastBroadcastedOrReceivedSceneVersion(getSceneVersion(restored));
+    this.excalidrawAPI.updateScene({
+      elements: restored,
+      appState: viewport,
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    LocalData.resumeSave("collaboration");
+    scenePromise.resolve({
+      elements: restored,
+      appState: viewport,
+      scrollToContent: false,
+    });
+    const fileIds = restored
+      .filter(isInitializedImageElement)
+      .filter((element) => !element.isDeleted)
+      .map((element) => element.fileId);
+    const files =
+      preparedFiles ??
+      (await readCachedRoomFiles(room.roomId, room.roomKey, fileIds));
+    if (this.roomStartGeneration === generation) {
+      const existingFiles = this.excalidrawAPI.getFiles();
+      const missingFiles = files.filter(
+        (file) =>
+          existingFiles[file.id]?.dataURL !== file.dataURL ||
+          existingFiles[file.id]?.mimeType !== file.mimeType,
+      );
+      if (missingFiles.length) {
+        this.excalidrawAPI.addFiles(missingFiles);
+      }
+    }
+  };
+
+  private rememberPreparedRoom = () => {
+    const { roomId, roomKey } = this.portal;
+    if (
+      !roomId ||
+      !roomKey ||
+      (!this.offlineRecoveryPending && !this.portal.socketInitialized) ||
+      import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE === "true"
+    ) {
+      return;
+    }
+    const elements = [...this.excalidrawAPI.getSceneElementsIncludingDeleted()];
+    void saveRoomDraft(roomId, roomKey, getSyncableElements(elements));
+    const { scrollX, scrollY, zoom } = this.excalidrawAPI.getAppState();
+    const currentFiles = this.excalidrawAPI.getFiles();
+    const fileIds = new Set(
+      elements
+        .filter(isInitializedImageElement)
+        .map((element) => element.fileId),
+    );
+    const snapshot: PreparedRoomScene = {
+      elements,
+      viewport: { scrollX, scrollY, zoom },
+      baseline: undefined,
+      files: [...fileIds].flatMap((fileId) =>
+        currentFiles[fileId] ? [{ ...currentFiles[fileId] }] : [],
+      ),
+      generation: getRoomCacheGeneration(roomId, roomKey),
+      fileGeneration: getRoomFileCacheGeneration(roomId, roomKey),
+    };
+    const cacheKey = JSON.stringify([roomId, roomKey]);
+    this.preparedRoomScenes.delete(cacheKey);
+    this.preparedRoomScenes.set(cacheKey, snapshot);
+    while (
+      this.preparedRoomScenes.size > 8 ||
+      [...this.preparedRoomScenes.values()].reduce(
+        (total, room) => total + room.elements.length,
+        0,
+      ) > 20_000 ||
+      [...this.preparedRoomScenes.values()].reduce(
+        (total, room) =>
+          total +
+          room.files.reduce(
+            (bytes, file) => bytes + file.dataURL.length * 2,
+            0,
+          ),
+        0,
+      ) >
+        64 * 1024 * 1024
+    ) {
+      this.preparedRoomScenes.delete(
+        this.preparedRoomScenes.keys().next().value!,
+      );
+    }
+    void Promise.all([
+      readCachedRoomScene(roomId, roomKey),
+      readRoomDraft(roomId, roomKey),
+    ]).then(([cached, draft]) => {
+      if (this.preparedRoomScenes.get(cacheKey) !== snapshot) {
+        return;
+      }
+      if (
+        draft === null ||
+        snapshot.generation !== getRoomCacheGeneration(roomId, roomKey)
+      ) {
+        this.preparedRoomScenes.delete(cacheKey);
+        return;
+      }
+      snapshot.baseline = cached?.elements ?? null;
+    });
+  };
+
+  private startRoomConnection = async ({
+    roomId,
+    roomKey,
+    existingRoomLinkData,
+    scenePromise,
+    generation,
+    cachedPreview,
+  }: {
+    roomId: string;
+    roomKey: string;
+    existingRoomLinkData: { roomId: string; roomKey: string } | null;
+    scenePromise: NonNullable<Collab["pendingScenePromise"]>;
+    generation: number;
+    cachedPreview: Promise<void>;
+  }) => {
     // The socket client is a lazily-loaded chunk. Offline (or a not-yet
     // precached chunk) it never resolves — enter offline mode instead of
     // hanging the boot with local saves paused.
@@ -776,18 +1145,53 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         /* webpackChunkName: "socketIoClient" */ "socket.io-client"
       ));
     } catch (error: any) {
+      await cachedPreview;
+      if (this.roomStartGeneration !== generation) {
+        return null;
+      }
       console.error("socket.io chunk failed to load", error);
       this.enterOfflineRoomMode({ roomId, roomKey });
+      scenePromise.resolve(null);
       return null;
     }
 
+    if (this.roomStartGeneration !== generation) {
+      return null;
+    }
+
+    let roomInitialization: ReturnType<Collab["initializeRoom"]> | null = null;
+    let peerInitializationStarted = false;
+    const loadSavedSceneImmediately =
+      !!existingRoomLinkData &&
+      import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE !== "true";
     const fallbackInitializationHandler = () => {
-      this.initializeRoom({
+      roomInitialization ??= this.initializeRoom({
         roomLinkData: existingRoomLinkData,
         fetchScene: true,
-      }).then((scene) => {
-        scenePromise.resolve(scene);
+        cachedPreview,
+        onCachedScene: (scene) => scenePromise.resolve(scene),
       });
+      return roomInitialization
+        .then((scene) => {
+          if (!peerInitializationStarted) {
+            scenePromise.resolve(scene);
+          }
+        })
+        .catch((error) => {
+          if (
+            this.portal.socket !== roomSocket ||
+            this.portal.roomId !== roomId ||
+            this.portal.roomKey !== roomKey
+          ) {
+            return;
+          }
+          console.error("Room snapshot load failed", error);
+          this.enterOfflineRoomMode({ roomId, roomKey });
+          scenePromise.resolve({
+            elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+            appState: { errorMessage: t("roomDialog.error_network") },
+          });
+        });
     };
     this.fallbackInitializationHandler = fallbackInitializationHandler;
 
@@ -807,8 +1211,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       this.portal.socket.on("disconnect", this.onSocketDisconnect);
       this.portal.socket.on("connect", this.onSocketConnect);
     } catch (error: any) {
+      await cachedPreview;
+      if (this.roomStartGeneration !== generation) {
+        return null;
+      }
       console.error(error);
       this.setErrorDialog(error.message);
+      this.enterOfflineRoomMode({ roomId, roomKey });
+      scenePromise.resolve(null);
       return null;
     }
 
@@ -817,15 +1227,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     // fire-and-forget.
     registerRoom(roomId, roomKey);
 
-    if (existingRoomLinkData) {
-      // Joining a room starts blank — except when this is a background
-      // retry while offline work is pending: resetting would wipe the very
-      // strokes the retry is trying to sync. (Explicit room switches wipe
-      // the canvas themselves before starting, with pending cleared.)
-      if (!this.offlineRecoveryPending) {
-        this.excalidrawAPI.resetScene();
-      }
-    } else {
+    if (!existingRoomLinkData) {
       const elements = this.excalidrawAPI.getSceneElements().map((element) => {
         if (isImageElement(element) && element.status === "saved") {
           return newElementWith(element, { status: "pending" });
@@ -853,26 +1255,47 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       fallbackInitializationHandler,
       INITIAL_SCENE_UPDATE_TIMEOUT,
     );
+    const roomSocket = this.portal.socket;
 
     // All socket listeners are moving to Portal
     this.portal.socket.on(
       "client-broadcast",
       async (encryptedData: ArrayBuffer, iv: Uint8Array<ArrayBuffer>) => {
-        if (!this.portal.roomKey) {
+        if (
+          this.portal.socket !== roomSocket ||
+          this.portal.roomKey !== roomKey
+        ) {
           return;
         }
 
         const decryptedData = await this.decryptPayload(
           iv,
           encryptedData,
-          this.portal.roomKey,
+          roomKey,
         );
+        if (
+          this.portal.socket !== roomSocket ||
+          this.portal.roomKey !== roomKey
+        ) {
+          return;
+        }
 
         switch (decryptedData.type) {
           case WS_SUBTYPES.INVALID_RESPONSE:
             return;
           case WS_SUBTYPES.INIT: {
+            if (loadSavedSceneImmediately) {
+              this.handleRemoteSceneUpdate(
+                this._reconcileElements(
+                  toBrandedType<readonly RemoteExcalidrawElement[]>(
+                    decryptedData.payload.elements,
+                  ),
+                ),
+              );
+              break;
+            }
             if (!this.portal.socketInitialized) {
+              peerInitializationStarted = true;
               this.initializeRoom({ fetchScene: false });
               const remoteElements = toBrandedType<
                 readonly RemoteExcalidrawElement[]
@@ -895,6 +1318,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
                   roomKey,
                   this.portal.socket,
                 );
+                if (this.portal.socket !== roomSocket) {
+                  return;
+                }
                 if (savedElements?.length) {
                   this.setLastBroadcastedOrReceivedSceneVersion(
                     getSceneVersion(savedElements),
@@ -993,15 +1419,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       },
     );
 
-    this.portal.socket.on("first-in-room", async () => {
+    this.portal.socket.on("first-in-room", () => {
       if (this.portal.socket) {
         this.portal.socket.off("first-in-room");
       }
-      const sceneData = await this.initializeRoom({
-        fetchScene: true,
-        roomLinkData: existingRoomLinkData,
-      });
-      scenePromise.resolve(sceneData);
+      fallbackInitializationHandler();
     });
 
     this.portal.socket.on(
@@ -1017,18 +1439,45 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
     this.setActiveRoomLink(window.location.href);
 
+    if (loadSavedSceneImmediately) {
+      fallbackInitializationHandler();
+    }
+
     return scenePromise;
+  };
+
+  private resetRoomScene = () => {
+    const { openSidebar, defaultSidebarDockedPreference } =
+      this.excalidrawAPI.getAppState();
+    this.excalidrawAPI.resetScene();
+    this.excalidrawAPI.updateScene({
+      appState: { openSidebar, defaultSidebarDockedPreference },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
   };
 
   private initializeRoom = async ({
     fetchScene,
     roomLinkData,
+    onCachedScene,
+    cachedPreview,
   }:
     | {
         fetchScene: true;
         roomLinkData: { roomId: string; roomKey: string } | null;
+        cachedPreview?: Promise<void>;
+        onCachedScene?: (
+          scene: ImportedDataState & {
+            elements: readonly OrderedExcalidrawElement[];
+          },
+        ) => void;
       }
-    | { fetchScene: false; roomLinkData?: null }) => {
+    | {
+        fetchScene: false;
+        roomLinkData?: null;
+        onCachedScene?: never;
+        cachedPreview?: never;
+      }) => {
     clearTimeout(this.socketInitializationTimer!);
     if (this.portal.socket && this.fallbackInitializationHandler) {
       this.portal.socket.off(
@@ -1037,6 +1486,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       );
     }
     if (fetchScene && roomLinkData && this.portal.socket) {
+      const socket = this.portal.socket;
+      const wasInitialized = this.portal.socketInitialized;
+      const isCurrentRoom = () =>
+        this.portal.socket === socket &&
+        this.portal.roomId === roomLinkData.roomId &&
+        this.portal.roomKey === roomLinkData.roomKey;
       // Offline-first: load first, then decide wipe vs merge. resetScene()
       // upfront would destroy offline-drawn strokes that no server copy
       // holds yet; the explicit switch paths (Rooms open, hashchange) wipe
@@ -1046,7 +1501,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           const elements = await loadFromFirebase(
             roomLinkData.roomId,
             roomLinkData.roomKey,
-            this.portal.socket,
+            socket,
           );
           if (elements) {
             return elements;
@@ -1054,28 +1509,114 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         } catch (error: any) {
           // log the error and move on. other peers will sync us the scene.
           console.error(error);
-        } finally {
-          this.portal.socketInitialized = true;
         }
 
         // self-hosted fork: fall back to the /api/rooms snapshot when
         // firebase has nothing (or is disabled). Returns null on any
         // failure, in which case other peers will sync us the scene.
-        return await loadRoomFromServer(
-          roomLinkData.roomId,
-          roomLinkData.roomKey,
-          this.portal.socket,
-        );
+        const ownerWindow = this.context.container?.ownerDocument.defaultView;
+        const controller = ownerWindow
+          ? new ownerWindow.AbortController()
+          : null;
+        this.roomLoadController = controller;
+        let timeout: number | undefined;
+        const onProgress = () => {
+          ownerWindow?.clearTimeout(timeout);
+          timeout = ownerWindow?.setTimeout(() => controller?.abort(), 20_000);
+        };
+        onProgress();
+        try {
+          return await loadRoomFromServer(
+            roomLinkData.roomId,
+            roomLinkData.roomKey,
+            socket,
+            { signal: controller?.signal, throwOnError: true, onProgress },
+          );
+        } finally {
+          ownerWindow?.clearTimeout(timeout);
+          if (this.roomLoadController === controller) {
+            this.roomLoadController = null;
+          }
+        }
       };
 
-      const elements = await loadFromServerFirst();
+      const serverScenePromise = loadFromServerFirst().then(
+        (elements) => ({ status: "fulfilled" as const, elements }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      if (cachedPreview) {
+        await cachedPreview;
+        if (!isCurrentRoom()) {
+          return null;
+        }
+      }
+      if (
+        !cachedPreview &&
+        !wasInitialized &&
+        !this.offlineRecoveryPending &&
+        import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE !== "true"
+      ) {
+        const [cached, draft, backup] = await Promise.all([
+          readCachedRoomScene(roomLinkData.roomId, roomLinkData.roomKey),
+          readRoomDraft(roomLinkData.roomId, roomLinkData.roomKey),
+          readRoomBackup(localStorage, roomLinkData.roomId),
+        ]);
+        if (!isCurrentRoom() || this.portal.socketInitialized) {
+          return null;
+        }
+        if (cached || draft?.length) {
+          this.cachedRoomBaseline = cached?.elements ?? null;
+          const localElements = draft ?? backup ?? [];
+          const restored = restoreElements(
+            mergeBackupWithServer(localElements, cached?.elements ?? []),
+            null,
+            { repairBindings: true },
+          );
+          const preview = reconcileElements(
+            restored,
+            this.excalidrawAPI.getSceneElementsIncludingDeleted() as readonly RemoteExcalidrawElement[],
+            this.excalidrawAPI.getAppState(),
+          );
+          this.offlineRecoveryPending = true;
+          appJotaiStore.set(roomValidationPendingAtom, true);
+          this.setLastBroadcastedOrReceivedSceneVersion(
+            getSceneVersion(preview),
+          );
+          this.excalidrawAPI.updateScene({
+            elements: preview,
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          LocalData.resumeSave("collaboration");
+          this.loadImageFiles();
+          onCachedScene?.({ elements: preview, scrollToContent: true });
+        }
+      }
+      const result = await serverScenePromise;
+      if (result.status === "rejected") {
+        throw result.error;
+      }
+      const elements = result.elements;
+      if (
+        !isCurrentRoom() ||
+        (!wasInitialized && this.portal.socketInitialized)
+      ) {
+        return null;
+      }
       // Crash-safety: unsynced strokes from before a crash/offline stretch
       // live in the room backup. Merge them over the server snapshot so a
       // reload never drops work the server hasn't seen yet. Room-scoped, so
       // nothing leaks across rooms.
       const backup = await readRoomBackup(localStorage, roomLinkData.roomId);
+      if (
+        !isCurrentRoom() ||
+        (!wasInitialized && this.portal.socketInitialized)
+      ) {
+        return null;
+      }
+      this.portal.socketInitialized = true;
       if (elements) {
-        const merged =
+        let merged =
+          !this.cachedRoomBaseline &&
           backup?.length &&
           !this.elementsEqualIds(
             backup,
@@ -1083,6 +1624,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           )
             ? mergeBackupWithServer(backup, elements)
             : (elements as readonly SyncableExcalidrawElement[]);
+        if (!wasInitialized && !this.offlineRecoveryPending) {
+          merged = getSyncableElements(
+            reconcileElements(
+              restoreElements(merged, null, { repairBindings: true }),
+              this.excalidrawAPI.getSceneElementsIncludingDeleted() as readonly RemoteExcalidrawElement[],
+              this.excalidrawAPI.getAppState(),
+            ),
+          );
+        }
         // Set before any paint: updateScene synchronously fires onChange,
         // and without this the freshly loaded scene would rebroadcast to
         // the room as if it were a local edit (same reason _reconcileElements
@@ -1096,7 +1646,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         // canvas; on boot the initialData application of the same content
         // is a harmless second paint.
         if (!this.offlineRecoveryPending) {
-          this.excalidrawAPI.resetScene();
+          this.resetRoomScene();
           const restored = restoreElements(merged, null, {
             repairBindings: true,
           });
@@ -1105,8 +1655,22 @@ class Collab extends PureComponent<CollabProps, CollabState> {
             captureUpdate: CaptureUpdateAction.NEVER,
           });
         }
+        const recoveredChanges =
+          this.offlineRecoveryPending &&
+          (!this.cachedRoomBaseline ||
+            getRoomChanges(
+              this.cachedRoomBaseline,
+              getSyncableElements(this.getSceneElementsIncludingDeleted()),
+            ).length > 0);
         await this.paintOfflineRecovery(merged);
+        merged = getSyncableElements(
+          this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+        );
+        this.loadImageFiles();
         this.clearOfflinePending();
+        if (recoveredChanges) {
+          this.portal.broadcastScene(WS_SUBTYPES.UPDATE, merged, true);
+        }
         // Online and healthy: local saves resume so every later edit is
         // crash-safe (the boot pause only guarded the empty-canvas window).
         LocalData.resumeSave("collaboration");
@@ -1123,6 +1687,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // accumulating in the canvas (persisted via resumed local save) and
       // merges on recovery. A crash backup for the same room paints
       // immediately so a crash + offline boot still restores.
+      if (this.cachedRoomBaseline) {
+        this.enterOfflineRoomMode(roomLinkData);
+        return null;
+      }
       if (!this.portal.socket.connected) {
         this.enterOfflineRoomMode(roomLinkData);
         if (backup?.length) {
@@ -1170,7 +1738,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         this.queueSaveToFirebase();
         return null;
       }
-      this.excalidrawAPI.resetScene();
+      this.resetRoomScene();
     } else {
       this.portal.socketInitialized = true;
     }
@@ -1186,12 +1754,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     roomKey: string;
   }) {
     this.offlineRecoveryPending = true;
+    appJotaiStore.set(roomValidationPendingAtom, false);
     appJotaiStore.set(offlineRoomPendingAtom, { ...roomLinkData });
     LocalData.resumeSave("collaboration");
   }
 
   private clearOfflinePending() {
     this.offlineRecoveryPending = false;
+    this.cachedRoomBaseline = null;
+    appJotaiStore.set(roomValidationPendingAtom, false);
     appJotaiStore.set(offlineRoomPendingAtom, null);
   }
 
@@ -1205,12 +1776,22 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (!this.offlineRecoveryPending) {
       return;
     }
+    const baseline = this.cachedRoomBaseline;
     this.clearOfflinePending();
     // Syncable and Remote share structure; only the brand differs, and the
     // reconciler immediately restores + rebrands anyway.
-    const merged = this._reconcileElements(
-      elements as unknown as readonly RemoteExcalidrawElement[],
-    );
+    const merged = baseline
+      ? reconcileElements(
+          restoreElements(elements, null, { repairBindings: true }),
+          getRoomChanges(
+            baseline,
+            getSyncableElements(this.getSceneElementsIncludingDeleted()),
+          ) as unknown as readonly RemoteExcalidrawElement[],
+          this.excalidrawAPI.getAppState(),
+        )
+      : this._reconcileElements(
+          elements as unknown as readonly RemoteExcalidrawElement[],
+        );
     this.setLastBroadcastedOrReceivedSceneVersion(getSceneVersion(merged));
     this.excalidrawAPI.updateScene({
       elements: merged,
@@ -1274,18 +1855,45 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private loadImageFiles = throttle(async () => {
-    const { loadedFiles, erroredFiles } =
-      await this.fetchImageFilesFromFirebase({
+    const { roomId, roomKey, socket } = this.portal;
+    const isCurrentRoom = () =>
+      this.portal.socket === socket &&
+      this.portal.roomId === roomId &&
+      this.portal.roomKey === roomKey;
+    if (!roomId || !roomKey) {
+      return;
+    }
+    const fileIds = this.excalidrawAPI
+      .getSceneElementsIncludingDeleted()
+      .filter(isInitializedImageElement)
+      .filter((element) => !element.isDeleted)
+      .map((element) => element.fileId);
+    const cachedFiles = await readCachedRoomFiles(roomId, roomKey, fileIds);
+    if (!isCurrentRoom()) {
+      return;
+    }
+    this.excalidrawAPI.addFiles(cachedFiles);
+    try {
+      const { loadedFiles, erroredFiles } =
+        await this.fetchImageFilesFromFirebase({
+          elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+        });
+
+      if (!isCurrentRoom()) {
+        return;
+      }
+      this.excalidrawAPI.addFiles(loadedFiles);
+
+      updateStaleImageStatuses({
+        excalidrawAPI: this.excalidrawAPI,
+        erroredFiles,
         elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
       });
-
-    this.excalidrawAPI.addFiles(loadedFiles);
-
-    updateStaleImageStatuses({
-      excalidrawAPI: this.excalidrawAPI,
-      erroredFiles,
-      elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
-    });
+    } catch (error) {
+      if (!(error instanceof AbortError)) {
+        console.error(error);
+      }
+    }
   }, LOAD_IMAGES_TIMEOUT);
 
   private handleRemoteSceneUpdate = (
@@ -1455,9 +2063,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     // Crash-safety: persist every edit locally, even while collaborating.
     // The roomId is stable for the session; the backup restores after a
     // crash even if the server snapshot lags behind.
-    if (this.portal.roomId) {
+    if (this.portal.roomId && this.portal.roomKey) {
       this.saveRoomBackupThrottled(
         this.portal.roomId,
+        this.portal.roomKey,
         getSyncableElements(elements),
       );
     }

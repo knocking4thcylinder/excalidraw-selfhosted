@@ -16,6 +16,11 @@ export default defineConfig(({ mode }) => {
   const envVars = loadEnv(mode, `../`);
   // https://vitejs.dev/config/
   return {
+    define: {
+      "import.meta.env.VITE_APP_LOADING_BENCHMARK": JSON.stringify(
+        envVars.VITE_APP_LOADING_BENCHMARK === "true" ? "true" : "false",
+      ),
+    },
     server: {
       port: Number(envVars.VITE_APP_PORT || 3000),
       // open the browser
@@ -178,7 +183,12 @@ export default defineConfig(({ mode }) => {
           // Short-code redirects (/s/...) must always hit the server, never
           // the SPA fallback — offline they simply fail, which is correct
           // (codes can't resolve without the registry).
-          navigateFallbackDenylist: [/^\/s\//],
+          navigateFallbackDenylist: [
+            /^\/s\//,
+            ...(envVars.VITE_APP_LOADING_BENCHMARK === "true"
+              ? [/^\/__bench\//]
+              : []),
+          ],
           // don't precache fonts, locales and separate chunks
           globIgnores: [
             "fonts.css",
