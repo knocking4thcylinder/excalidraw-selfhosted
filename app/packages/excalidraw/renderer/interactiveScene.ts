@@ -101,6 +101,7 @@ import {
   strokeRectWithRotation_simple,
   snapScrollToDevicePixels,
 } from "./helpers";
+import { profileRender } from "./renderPerformance";
 
 import type {
   AppState,
@@ -2167,7 +2168,12 @@ export const renderInteractiveScene = <
 >(
   renderConfig: InteractiveSceneRenderConfig,
 ): ReturnType<U> => {
-  const ret = _renderInteractiveScene(renderConfig);
+  const ret = profileRender(
+    renderConfig.canvas,
+    "interactive",
+    renderConfig.visibleElements.length,
+    () => _renderInteractiveScene(renderConfig),
+  );
   renderConfig.callback(ret);
   return ret as ReturnType<U>;
 };

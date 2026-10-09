@@ -8,7 +8,6 @@ import { LinkButton } from "@excalidraw/excalidraw/components/LinkButton";
 import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { useExcalidrawContainer } from "@excalidraw/excalidraw/components/App";
-import { useEffect } from "react";
 
 import type {
   AppState,
@@ -16,16 +15,13 @@ import type {
 } from "@excalidraw/excalidraw/types";
 
 import { RoomsPage } from "../rooms/RoomsPage";
-import { appJotaiStore } from "../app-jotai";
-import { fetchRoomFolders, fetchRooms } from "../data/rooms";
-
-import { roomFoldersAtom, roomsRegistryAtom } from "../rooms/explorerState";
-import { readCachedFolders, readCachedRooms } from "../data/roomCache";
+import { useRoomRegistry } from "../rooms/useRoomRegistry";
 
 import "./AppSidebar.scss";
 
 import type { CollabAPI } from "../collab/Collab";
-import type { RoomFolder, ServerRoomEntry } from "../data/rooms";
+
+const SIDEBAR_TAB_TRIGGER_CLASS = "excalidraw-button sidebar-tab-trigger";
 
 type SidebarPromoCopyProps = {
   text: string;
@@ -100,62 +96,7 @@ export const AppSidebar = ({
   const { container } = useExcalidrawContainer();
   const ownerWindow = container?.ownerDocument.defaultView;
 
-  useEffect(() => {
-    if (!ownerWindow) {
-      return;
-    }
-    let alive = true;
-    let hydratedRooms: ServerRoomEntry[] | null = null;
-    let hydratedFolders: RoomFolder[] | null = null;
-    const controller = new ownerWindow.AbortController();
-    const timeout = ownerWindow.setTimeout(() => controller.abort(), 10_000);
-    void readCachedRooms().then((rooms) => {
-      if (alive && rooms && appJotaiStore.get(roomsRegistryAtom) === null) {
-        hydratedRooms = rooms;
-        appJotaiStore.set(roomsRegistryAtom, rooms);
-      }
-    });
-    void readCachedFolders().then((folders) => {
-      if (alive && folders && appJotaiStore.get(roomFoldersAtom) === null) {
-        hydratedFolders = folders;
-        appJotaiStore.set(roomFoldersAtom, folders);
-      }
-    });
-    const roomRequest =
-      appJotaiStore.get(roomsRegistryAtom) === null
-        ? fetchRooms(controller.signal).then((rooms) => {
-            if (
-              alive &&
-              rooms &&
-              (appJotaiStore.get(roomsRegistryAtom) === null ||
-                appJotaiStore.get(roomsRegistryAtom) === hydratedRooms)
-            ) {
-              appJotaiStore.set(roomsRegistryAtom, rooms);
-            }
-          })
-        : Promise.resolve();
-    const folderRequest =
-      appJotaiStore.get(roomFoldersAtom) === null
-        ? fetchRoomFolders(controller.signal).then((folders) => {
-            if (
-              alive &&
-              folders &&
-              (appJotaiStore.get(roomFoldersAtom) === null ||
-                appJotaiStore.get(roomFoldersAtom) === hydratedFolders)
-            ) {
-              appJotaiStore.set(roomFoldersAtom, folders);
-            }
-          })
-        : Promise.resolve();
-    Promise.all([roomRequest, folderRequest]).finally(() =>
-      ownerWindow.clearTimeout(timeout),
-    );
-    return () => {
-      alive = false;
-      controller.abort();
-      ownerWindow.clearTimeout(timeout);
-    };
-  }, [ownerWindow]);
+  useRoomRegistry(ownerWindow, true);
 
   return (
     <>
@@ -168,6 +109,7 @@ export const AppSidebar = ({
         <DefaultSidebar.TabTriggers>
           <Sidebar.TabTrigger
             tab="rooms"
+            className={`${SIDEBAR_TAB_TRIGGER_CLASS} sidebar-tab-trigger--rooms`}
             aria-label={t("myRooms.explorer")}
             title={t("myRooms.explorer")}
           >
@@ -175,13 +117,25 @@ export const AppSidebar = ({
           </Sidebar.TabTrigger>
           <Sidebar.TabTrigger
             tab="comments"
-            style={{ opacity: openSidebar?.tab === "comments" ? 1 : 0.4 }}
+            className={
+              openSidebar?.tab === "comments"
+                ? SIDEBAR_TAB_TRIGGER_CLASS
+                : `${SIDEBAR_TAB_TRIGGER_CLASS} sidebar-tab-trigger--idle`
+            }
+            aria-label="Comments"
+            title="Comments"
           >
             {messageCircleIcon}
           </Sidebar.TabTrigger>
           <Sidebar.TabTrigger
             tab="presentation"
-            style={{ opacity: openSidebar?.tab === "presentation" ? 1 : 0.4 }}
+            className={
+              openSidebar?.tab === "presentation"
+                ? SIDEBAR_TAB_TRIGGER_CLASS
+                : `${SIDEBAR_TAB_TRIGGER_CLASS} sidebar-tab-trigger--idle`
+            }
+            aria-label="Presentations"
+            title="Presentations"
           >
             {presentationIcon}
           </Sidebar.TabTrigger>

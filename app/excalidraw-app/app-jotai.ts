@@ -13,6 +13,7 @@ import { useLayoutEffect } from "react";
 export const appJotaiStore = createStore();
 
 export { atom, Provider, useAtom, useAtomValue, useSetAtom };
+export type { PrimitiveAtom };
 
 export const useAtomWithInitialValue = <
   T extends unknown,

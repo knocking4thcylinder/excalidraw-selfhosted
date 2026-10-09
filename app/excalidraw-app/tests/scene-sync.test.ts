@@ -8,6 +8,7 @@ import type { FractionalIndex } from "@excalidraw/element/types";
 import { getSyncableElements } from "../data";
 import {
   cacheRoomScene,
+  clearRoomMemoryCache,
   flushRoomCache,
   readCachedRoomScene,
 } from "../data/roomCache";
@@ -361,6 +362,30 @@ describe("partial room synchronization", () => {
     expect(loaded?.[0].x).toBe(500);
   });
 
+  it("retains acknowledged scene validators after room memory eviction", async () => {
+    const initial = await seed();
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(null, {
+          status: 304,
+          headers: { "x-scene-sync": "1", "x-scene-patches": "0" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await loadRoomFromServer("room", "key", null)).toEqual(initial);
+    for (let index = 0; index < 9; index++) {
+      await cacheRoomScene(`other-${index}`, "key", {
+        etag: `"other-${index}"`,
+        elements: [],
+      });
+    }
+    expect(await loadRoomFromServer("room", "key", null)).toEqual(initial);
+    expect(fetchMock.mock.calls[1][1].headers).toEqual({
+      "If-None-Match": '"base"',
+    });
+  });
+
   it("keeps the good cache if the patch chain is incomplete", async () => {
     await seed();
     vi.stubGlobal(
@@ -380,22 +405,34 @@ describe("partial room synchronization", () => {
     expect((await readCachedRoomScene("room", "key"))?.etag).toBe('"base"');
   });
 
-  it("uploads a small patch and persists its acknowledged baseline", async () => {
-    const initial = await seed();
-    const current = changedScene(initial);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(response({ ok: true }, '"next"', 1));
-    vi.stubGlobal("fetch", fetchMock);
-    const session = portal();
-    await saveRoomToServer(session, current);
-    expect(fetchMock.mock.calls[0][1].method).toBe("PATCH");
-    const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(payload.baseEtag).toBe('"base"');
-    expect(JSON.parse(window.atob(payload.ciphertext)).upserts).toHaveLength(1);
-    expect(isSavedToServer(session, current)).toBe(true);
-    expect((await readCachedRoomScene("room", "key"))?.etag).toBe('"next"');
-  });
+  it.each(["RAM", "IndexedDB"])(
+    "uploads a small patch from %s and persists its acknowledged baseline",
+    async (baselineStore) => {
+      const initial = await seed();
+      if (baselineStore === "IndexedDB") {
+        clearRoomMemoryCache();
+      }
+      const current = changedScene(initial);
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(response({ ok: true }, '"next"', 1));
+      vi.stubGlobal("fetch", fetchMock);
+      const session = portal();
+      await saveRoomToServer(session, current);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][1].method).toBe("PATCH");
+      const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(payload.baseEtag).toBe('"base"');
+      expect(JSON.parse(window.atob(payload.ciphertext)).upserts).toHaveLength(
+        1,
+      );
+      expect(isSavedToServer(session, current)).toBe(true);
+      expect(await readCachedRoomScene("room", "key")).toMatchObject({
+        etag: '"next"',
+        elements: JSON.parse(JSON.stringify(current)),
+      });
+    },
+  );
 
   it("falls back to full snapshots when the backend does not advertise sync", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{"ok":true}'));

@@ -167,7 +167,6 @@ interface CollabState {
   /** errors related to saving */
   dialogNotifiedErrors: Record<string, boolean>;
   username: string;
-  activeRoomLink: string | null;
 }
 
 export const activeRoomLinkAtom = atom<string | null>(null);
@@ -239,13 +238,24 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   /** the socket ids of the users following the current user */
   private followedBy = new Set<SocketId>();
 
+  private isPortalCurrent(
+    socket: Portal["socket"],
+    roomId: Portal["roomId"],
+    roomKey: Portal["roomKey"],
+  ) {
+    return (
+      this.portal.socket === socket &&
+      this.portal.roomId === roomId &&
+      this.portal.roomKey === roomKey
+    );
+  }
+
   constructor(props: CollabProps) {
     super(props);
     this.state = {
       errorMessage: null,
       dialogNotifiedErrors: {},
       username: importUsernameFromLocalStorage() || "",
-      activeRoomLink: null,
     };
     this.portal = new Portal(this);
     this.fileManager = new FileManager({
@@ -268,20 +278,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           download: (missing) =>
             loadFilesFromFirebase(`files/rooms/${roomId}`, roomKey, missing),
           onCachedFiles: (files) => {
-            if (
-              this.portal.socket === socket &&
-              this.portal.roomId === roomId &&
-              this.portal.roomKey === roomKey
-            ) {
+            if (this.isPortalCurrent(socket, roomId, roomKey)) {
               this.excalidrawAPI.addFiles(files);
             }
           },
         });
-        if (
-          this.portal.socket !== socket ||
-          this.portal.roomId !== roomId ||
-          this.portal.roomKey !== roomKey
-        ) {
+        if (!this.isPortalCurrent(socket, roomId, roomKey)) {
           throw new AbortError();
         }
         return result;
@@ -643,9 +645,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     void saveRoomToServer(this.portal, syncableElements, {
       onConflict: (latest, baseline) => {
         if (
-          this.portal.socket !== socket ||
-          this.portal.roomId !== roomId ||
-          this.portal.roomKey !== roomKey ||
+          !this.isPortalCurrent(socket, roomId, roomKey) ||
           this.offlineRecoveryPending
         ) {
           return;
@@ -1178,11 +1178,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           }
         })
         .catch((error) => {
-          if (
-            this.portal.socket !== roomSocket ||
-            this.portal.roomId !== roomId ||
-            this.portal.roomKey !== roomKey
-          ) {
+          if (!this.isPortalCurrent(roomSocket, roomId, roomKey)) {
             return;
           }
           console.error("Room snapshot load failed", error);
@@ -1489,9 +1485,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       const socket = this.portal.socket;
       const wasInitialized = this.portal.socketInitialized;
       const isCurrentRoom = () =>
-        this.portal.socket === socket &&
-        this.portal.roomId === roomLinkData.roomId &&
-        this.portal.roomKey === roomLinkData.roomKey;
+        this.isPortalCurrent(socket, roomLinkData.roomId, roomLinkData.roomKey);
       // Offline-first: load first, then decide wipe vs merge. resetScene()
       // upfront would destroy offline-drawn strokes that no server copy
       // holds yet; the explicit switch paths (Rooms open, hashchange) wipe
@@ -1856,10 +1850,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   private loadImageFiles = throttle(async () => {
     const { roomId, roomKey, socket } = this.portal;
-    const isCurrentRoom = () =>
-      this.portal.socket === socket &&
-      this.portal.roomId === roomId &&
-      this.portal.roomKey === roomKey;
+    const isCurrentRoom = () => this.isPortalCurrent(socket, roomId, roomKey);
     if (!roomId || !roomKey) {
       return;
     }
@@ -2136,11 +2127,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   getUsername = () => this.state.username;
 
   setActiveRoomLink = (activeRoomLink: string | null) => {
-    this.setState({ activeRoomLink });
     appJotaiStore.set(activeRoomLinkAtom, activeRoomLink);
   };
 
-  getActiveRoomLink = () => this.state.activeRoomLink;
+  getActiveRoomLink = () => appJotaiStore.get(activeRoomLinkAtom);
 
   setErrorIndicator = (errorMessage: string | null) => {
     appJotaiStore.set(collabErrorIndicatorAtom, {

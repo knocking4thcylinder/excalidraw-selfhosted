@@ -189,7 +189,7 @@ describe("room snapshot requests", () => {
     const elements = await loadRoomFromServer("room-a", "key-a", null);
     await saveRoomDraft("room-a", "key-a", elements!);
     const downloading = loadRoomFromServer("room-a", "key-a", null);
-    expect(typeof resolveDownload).toBe("function");
+    await vi.waitFor(() => expect(typeof resolveDownload).toBe("function"));
     expect(await deleteRoom("room-a", "key-a")).toBe(true);
     resolveDownload(snapshotResponse('"late"'));
     expect(await downloading).toBeNull();

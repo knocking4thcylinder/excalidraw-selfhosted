@@ -28,7 +28,6 @@ import type { Socket } from "socket.io-client";
 import type { SyncableExcalidrawElement } from ".";
 import type { CachedRoomScene } from "./roomCache";
 
-const roomSceneCache = new Map<string, CachedRoomScene>();
 const roomCacheGenerations = new Map<string, number>();
 const pendingSceneSaves = new WeakMap<Socket, Promise<void>>();
 const sceneSaveEpochs = new WeakMap<Socket, number>();
@@ -37,20 +36,6 @@ const socketSceneBaselines = new WeakMap<
   { cacheKey: string; scene: CachedRoomScene | null }
 >();
 const roomSyncCapabilities = new Set<string>();
-
-const rememberRoomScene = async (
-  roomId: string,
-  roomKey: string,
-  scene: CachedRoomScene,
-) => {
-  const cacheKey = JSON.stringify([roomId, roomKey]);
-  roomSceneCache.delete(cacheKey);
-  roomSceneCache.set(cacheKey, cloneJSON(scene));
-  await cacheRoomScene(roomId, roomKey, scene);
-  while (roomSceneCache.size > 8) {
-    roomSceneCache.delete(roomSceneCache.keys().next().value!);
-  }
-};
 
 const syncMetadata = (response: Response) =>
   response.headers.get("x-scene-sync") === "1"
@@ -76,7 +61,6 @@ const decodeScenePayload = async (
 };
 
 export const clearRoomSceneCache = () => {
-  roomSceneCache.clear();
   roomSyncCapabilities.clear();
   clearRoomMemoryCache();
 };
@@ -305,7 +289,6 @@ export const deleteRoom = async (
         cacheKey,
         (roomCacheGenerations.get(cacheKey) ?? 0) + 1,
       );
-      roomSceneCache.delete(cacheKey);
       await forgetCachedRoom(roomId, roomKey);
     }
     return resp.ok;
@@ -405,8 +388,7 @@ const saveRoomSnapshot = async (
     const baseline =
       sessionBaseline?.cacheKey === cacheKey
         ? sessionBaseline.scene
-        : roomSceneCache.get(cacheKey) ??
-          (await readCachedRoomScene(roomId, roomKey));
+        : await readCachedRoomScene(roomId, roomKey);
     socketSceneBaselines.set(socket, { cacheKey, scene: baseline });
     const isCurrentRoom = () =>
       generation === (roomCacheGenerations.get(cacheKey) ?? 0);
@@ -508,7 +490,7 @@ const saveRoomSnapshot = async (
           ...syncMetadata(resp),
         };
         socketSceneBaselines.set(socket, { cacheKey, scene: confirmed });
-        await rememberRoomScene(roomId, roomKey, confirmed);
+        await cacheRoomScene(roomId, roomKey, confirmed);
       }
     } else if (resp.status === 412) {
       try {
@@ -549,9 +531,7 @@ export const loadRoomFromServer = async (
 ): Promise<readonly SyncableExcalidrawElement[] | null> => {
   const cacheKey = JSON.stringify([roomId, roomKey]);
   const generation = roomCacheGenerations.get(cacheKey) ?? 0;
-  const cached =
-    roomSceneCache.get(cacheKey) ??
-    (await readCachedRoomScene(roomId, roomKey));
+  const cached = await readCachedRoomScene(roomId, roomKey);
   try {
     const resp = await fetch(
       `/api/rooms/${encodeURIComponent(roomId)}/scene?key=${encodeURIComponent(
@@ -584,11 +564,7 @@ export const loadRoomFromServer = async (
         elements: cached.elements,
         ...syncMetadata(resp),
       };
-      await rememberRoomScene(roomId, roomKey, {
-        etag: cached.etag,
-        elements: cached.elements,
-        ...syncMetadata(resp),
-      });
+      await cacheRoomScene(roomId, roomKey, confirmed);
       const elements = cloneJSON(cached.elements);
       if (socket) {
         ServerSceneVersionCache.set(socket, elements);
@@ -601,7 +577,6 @@ export const loadRoomFromServer = async (
         socketSceneBaselines.set(socket, { cacheKey, scene: null });
       }
       if (resp.status === 404 || resp.status === 403) {
-        roomSceneCache.delete(cacheKey);
         await invalidateCachedRoomScene(roomId, roomKey);
       }
       if (options?.throwOnError && resp.status !== 404) {
@@ -703,7 +678,7 @@ export const loadRoomFromServer = async (
       if (socket) {
         socketSceneBaselines.set(socket, { cacheKey, scene: confirmed });
       }
-      await rememberRoomScene(roomId, roomKey, confirmed);
+      await cacheRoomScene(roomId, roomKey, confirmed);
     }
 
     return elements;

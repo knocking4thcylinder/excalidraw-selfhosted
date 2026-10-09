@@ -13,6 +13,8 @@ import { StoreIncrement } from "@excalidraw/element";
 import type { DurableIncrement, EphemeralIncrement } from "@excalidraw/element";
 
 import ExcalidrawApp from "../App";
+import { appJotaiStore } from "../app-jotai";
+import { activeRoomLinkAtom, collabAPIAtom } from "../collab/Collab";
 
 const { h } = window;
 
@@ -71,6 +73,18 @@ vi.mock("socket.io-client", () => {
  * i.e. multiplayer history tests could be a good first candidate, as we could test both history stacks simultaneously.
  */
 describe("collaboration", () => {
+  it("reads the current room link from the shared atom without mirrored state", async () => {
+    await render(<ExcalidrawApp />);
+    const collabAPI = appJotaiStore.get(collabAPIAtom);
+    expect(collabAPI).not.toBeNull();
+    act(() =>
+      appJotaiStore.set(activeRoomLinkAtom, "https://deck/#room=room,key"),
+    );
+    expect(collabAPI?.getActiveRoomLink()).toBe("https://deck/#room=room,key");
+    act(() => appJotaiStore.set(activeRoomLinkAtom, null));
+    expect(collabAPI?.getActiveRoomLink()).toBeNull();
+  });
+
   it("should emit two ephemeral increments even though updates get batched", async () => {
     const durableIncrements: DurableIncrement[] = [];
     const ephemeralIncrements: EphemeralIncrement[] = [];

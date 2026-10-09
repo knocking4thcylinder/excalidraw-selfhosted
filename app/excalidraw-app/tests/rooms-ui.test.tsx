@@ -115,10 +115,67 @@ const mountRooms = (props: Partial<Parameters<typeof RoomsPage>[0]> = {}) => {
   };
 };
 
-const chooseFolder = async (label: string, option: string) => {
-  fireEvent.keyDown(await screen.findByRole("button", { name: label }), {
-    key: "ArrowDown",
+const openRoomMenu = async (name: string) => {
+  fireEvent.keyDown(
+    await screen.findByRole("button", { name: `More actions for ${name}` }),
+    { key: "ArrowDown" },
+  );
+  return screen.findByRole("menu", { name: `More actions for ${name}` });
+};
+
+const chooseRoomAction = async (name: string, action: string) => {
+  await openRoomMenu(name);
+  fireEvent.click(await screen.findByRole("menuitem", { name: action }));
+};
+
+// Opens a room's "Move to folder" submenu and returns it.
+const openMoveMenu = async (name: string) => {
+  await openRoomMenu(name);
+  fireEvent.keyDown(
+    await screen.findByRole("menuitem", { name: "Move to folder" }),
+    { key: "ArrowRight" },
+  );
+  return screen.findByRole("menu", { name: `Move ${name} to folder` });
+};
+
+const chooseFolderAction = async (name: string, action: string) => {
+  fireEvent.keyDown(
+    await screen.findByRole("button", {
+      name: `More actions for folder ${name}`,
+    }),
+    { key: "ArrowDown" },
+  );
+  fireEvent.click(await screen.findByRole("menuitem", { name: action }));
+};
+
+const expectSelectedFolder = async (name: string) =>
+  waitFor(() =>
+    expect(screen.getByRole("treeitem", { name })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    ),
+  );
+
+const closeMenus = async () => {
+  fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: "Escape",
   });
+  await waitFor(() =>
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument(),
+  );
+};
+
+const currentFolderOf = async (name: string) => {
+  await openMoveMenu(name);
+  const checked = screen
+    .getAllByRole("menuitemradio")
+    .find((item) => item.getAttribute("aria-checked") === "true");
+  await closeMenus();
+  return checked?.textContent;
+};
+
+const chooseFolder = async (label: string, option: string) => {
+  await openMoveMenu(label.replace(/^Move (.*) to folder$/, "$1"));
   fireEvent.click(await screen.findByRole("menuitemradio", { name: option }));
   await waitFor(() =>
     expect(screen.queryByRole("menu")).not.toBeInTheDocument(),
@@ -260,8 +317,8 @@ describe("rooms UI", () => {
   it("deletes a room only after confirming and immediately removes its tree row", async () => {
     vi.mocked(deleteRoom).mockResolvedValue(true);
     mountRooms();
-    const algebra = await screen.findByRole("treeitem", { name: "Algebra" });
-    fireEvent.click(within(algebra).getByRole("button", { name: "Delete" }));
+    await screen.findByRole("treeitem", { name: "Algebra" });
+    await chooseRoomAction("Algebra", "Delete");
     const confirmation = screen.getByRole("alertdialog", { name: "Delete" });
     expect(confirmation).toHaveTextContent("Algebra");
     expect(
@@ -302,11 +359,7 @@ describe("rooms UI", () => {
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
     mountRooms();
-    fireEvent.click(
-      within(
-        await screen.findByRole("treeitem", { name: "Algebra" }),
-      ).getByRole("button", { name: "Delete" }),
-    );
+    await chooseRoomAction("Algebra", "Delete");
     const confirmation = screen.getByRole("alertdialog", { name: "Delete" });
     fireEvent.click(
       within(confirmation).getByRole("button", { name: "Delete" }),
@@ -336,11 +389,7 @@ describe("rooms UI", () => {
       }),
     );
     mountRooms();
-    fireEvent.click(
-      within(
-        await screen.findByRole("treeitem", { name: "Algebra" }),
-      ).getByRole("button", { name: "Delete" }),
-    );
+    await chooseRoomAction("Algebra", "Delete");
     const button = within(
       screen.getByRole("alertdialog", { name: "Delete" }),
     ).getByRole("button", { name: "Delete" });
@@ -588,7 +637,7 @@ describe("rooms UI", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("creates subfolders inside the selected folder", async () => {
+  it("creates subfolders from a folder's menu", async () => {
     vi.mocked(fetchRoomFolders).mockResolvedValue([
       { id: "school", name: "School" },
     ]);
@@ -598,8 +647,8 @@ describe("rooms UI", () => {
       parentId: "school",
     });
     mountRooms();
-    await chooseTreeFolder("School (0)");
-    fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+    await screen.findByRole("treeitem", { name: "School" });
+    await chooseFolderAction("School", "New folder");
     expect(
       screen.queryByRole("button", { name: "Parent folder" }),
     ).not.toBeInTheDocument();
@@ -614,10 +663,10 @@ describe("rooms UI", () => {
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), {
       key: "Enter",
     });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("School / Math"),
+    await expectSelectedFolder("Math");
+    expect(screen.getByRole("treeitem", { name: "Math" })).toHaveAttribute(
+      "aria-level",
+      "2",
     );
     expect(saveRoomFolder).toHaveBeenCalledWith("Math", undefined, "school");
   });
@@ -691,7 +740,7 @@ describe("rooms UI", () => {
     });
     mountRooms();
     await chooseTreeFolder("School (1)");
-    fireEvent.click(screen.getByRole("button", { name: "Rename folder" }));
+    await chooseFolderAction("School", "Rename folder");
     const input = screen.getByRole("textbox", { name: "Folder name" });
     expect(input.closest('[role="treeitem"]')).toHaveAttribute(
       "aria-label",
@@ -702,11 +751,7 @@ describe("rooms UI", () => {
     ).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: "Classes" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("Classes"),
-    );
+    await expectSelectedFolder("Classes");
     expect(saveRoomFolder).toHaveBeenCalledWith("Classes", "school", null);
     expect(
       screen.getByRole("button", { name: "Open folder Classes / Math" }),
@@ -726,10 +771,10 @@ describe("rooms UI", () => {
       dataTransfer: transfer,
     });
     fireEvent.drop(screen.getByText("Top level"), { dataTransfer: transfer });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("Math"),
+    await expectSelectedFolder("Math");
+    expect(screen.getByRole("treeitem", { name: "Math" })).toHaveAttribute(
+      "aria-level",
+      "1",
     );
     expect(saveRoomFolder).toHaveBeenCalledWith("Math", "math", null);
   });
@@ -744,8 +789,8 @@ describe("rooms UI", () => {
     ]);
     vi.mocked(deleteRoomFolder).mockResolvedValue(true);
     mountRooms();
-    await chooseTreeFolder("School (1)");
-    fireEvent.click(screen.getByRole("button", { name: "Delete folder" }));
+    await screen.findByRole("treeitem", { name: "School" });
+    await chooseFolderAction("School", "Delete folder");
     expect(screen.getByText(/and its subfolders/)).toBeInTheDocument();
     fireEvent.click(
       within(screen.getByText(/and its subfolders/).parentElement!).getByRole(
@@ -755,13 +800,15 @@ describe("rooms UI", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("Rooms"),
+        screen.queryByRole("treeitem", { name: "School" }),
+      ).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "Algebra" })).toBeInTheDocument();
+    await openRoomMenu("Algebra");
     expect(
-      screen.queryByRole("button", { name: "Move Algebra to folder" }),
+      screen.queryByRole("menuitem", { name: "Move to folder" }),
     ).not.toBeInTheDocument();
+    await closeMenus();
   });
 
   it("searches across collapsed folders and restores expansion after clearing", async () => {
@@ -815,11 +862,7 @@ describe("rooms UI", () => {
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), {
       key: "Enter",
     });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("School"),
-    );
+    await expectSelectedFolder("School");
     expect(saveRoomFolder).toHaveBeenCalledWith("School", undefined, null);
     expect(
       screen.getByRole("treeitem", { name: "School" }),
@@ -830,9 +873,7 @@ describe("rooms UI", () => {
     ]);
     mountRooms();
     await chooseTreeFolder("School (0)");
-    expect(screen.getByRole("button", { name: "All rooms" })).toHaveTextContent(
-      "School",
-    );
+    await expectSelectedFolder("School");
   });
 
   it("renames a folder without changing room membership", async () => {
@@ -848,18 +889,14 @@ describe("rooms UI", () => {
     });
     mountRooms();
     await chooseTreeFolder("School (1)");
-    fireEvent.click(screen.getByRole("button", { name: "Rename folder" }));
+    await chooseFolderAction("School", "Rename folder");
     fireEvent.change(screen.getByRole("textbox", { name: "Folder name" }), {
       target: { value: "Classes" },
     });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), {
       key: "Enter",
     });
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("Classes"),
-    );
+    await expectSelectedFolder("Classes");
     expect(saveRoomFolder).toHaveBeenCalledWith("Classes", "school", null);
     expect(screen.getByRole("button", { name: "Algebra" })).toBeInTheDocument();
   });
@@ -870,20 +907,14 @@ describe("rooms UI", () => {
     ]);
     vi.mocked(moveRoomToFolder).mockResolvedValue(true);
     mountRooms();
-    await screen.findByRole("button", {
-      name: "Move Algebra to folder",
-    });
+    await screen.findByRole("treeitem", { name: "School" });
     await chooseFolder("Move Algebra to folder", "School");
     await chooseTreeFolder("School");
-    expect(
-      screen.getByRole("button", { name: "Move Algebra to folder" }),
-    ).toHaveTextContent("School");
+    expect(await currentFolderOf("Algebra")).toBe("School");
     expect(moveRoomToFolder).toHaveBeenCalledWith(rooms[0], "school");
     await chooseFolder("Move Algebra to folder", "Unfiled");
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Move Algebra to folder" }),
-      ).toHaveTextContent("Unfiled"),
+    await waitFor(async () =>
+      expect(await currentFolderOf("Algebra")).toBe("Unfiled"),
     );
     expect(moveRoomToFolder).toHaveBeenLastCalledWith(
       { ...rooms[0], folderId: "school" },
@@ -897,14 +928,12 @@ describe("rooms UI", () => {
     ]);
     vi.mocked(moveRoomToFolder).mockResolvedValue(false);
     mountRooms();
-    const move = await screen.findByRole("button", {
-      name: "Move Algebra to folder",
-    });
+    await screen.findByRole("treeitem", { name: "School" });
     await chooseFolder("Move Algebra to folder", "School");
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Couldn't move the room",
     );
-    expect(move).toHaveTextContent("Unfiled");
+    expect(await currentFolderOf("Algebra")).toBe("Unfiled");
     expect(screen.getByRole("button", { name: "Algebra" })).toBeInTheDocument();
   });
 
@@ -917,8 +946,8 @@ describe("rooms UI", () => {
     ]);
     vi.mocked(deleteRoomFolder).mockResolvedValue(true);
     mountRooms();
-    await chooseTreeFolder("School (1)");
-    fireEvent.click(screen.getByRole("button", { name: "Delete folder" }));
+    await screen.findByRole("treeitem", { name: "School" });
+    await chooseFolderAction("School", "Delete folder");
     expect(
       screen.getByText(/All rooms inside will move to Unfiled/),
     ).toBeInTheDocument();
@@ -931,8 +960,8 @@ describe("rooms UI", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "All rooms" }),
-      ).toHaveTextContent("Rooms"),
+        screen.queryByRole("treeitem", { name: "School" }),
+      ).not.toBeInTheDocument(),
     );
     expect(deleteRoomFolder).toHaveBeenCalledWith("school");
     expect(screen.getByRole("button", { name: "Algebra" })).toBeInTheDocument();
@@ -977,14 +1006,12 @@ describe("rooms UI", () => {
       { id: "school", name: "School" },
     ]);
     const { onClose } = mountRooms();
-    const trigger = await screen.findByRole("button", {
-      name: "Move Algebra to folder",
+    await screen.findByRole("treeitem", { name: "School" });
+    const trigger = screen.getByRole("button", {
+      name: "More actions for Algebra",
     });
     expect(document.querySelector(".RoomsPage select")).toBeNull();
-    fireEvent.keyDown(trigger, { key: "ArrowDown" });
-    const menu = await screen.findByRole("menu", {
-      name: "Move Algebra to folder",
-    });
+    const menu = await openMoveMenu("Algebra");
     expect(
       screen.getByRole("menuitemradio", { name: "Unfiled" }),
     ).toHaveAttribute("aria-checked", "true");
@@ -1040,10 +1067,8 @@ describe("rooms UI", () => {
       { id: "school", name: "School" },
     ]);
     mountRooms();
-    const trigger = await screen.findByRole("button", {
-      name: "Move Algebra to folder",
-    });
-    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    await screen.findByRole("treeitem", { name: "School" });
+    await openMoveMenu("Algebra");
     await waitFor(() =>
       expect(
         screen.getByRole("menuitemradio", { name: "Unfiled" }),
@@ -1080,33 +1105,6 @@ describe("rooms UI", () => {
     unmount();
     expect(opener).toHaveFocus();
     opener.remove();
-  });
-
-  it("expands and collapses the whole folder tree", async () => {
-    vi.mocked(fetchRoomFolders).mockResolvedValue([
-      { id: "school", name: "School" },
-      { id: "math", name: "Math", parentId: "school" },
-    ]);
-    vi.mocked(fetchRooms).mockResolvedValue([
-      { ...rooms[0], folderId: "math" },
-    ]);
-    mountRooms();
-    await screen.findByRole("treeitem", { name: "School" });
-    expect(
-      screen.queryByRole("treeitem", { name: "Algebra" }),
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
-    expect(
-      screen.getByRole("treeitem", { name: "Algebra" }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
-    expect(screen.getByRole("treeitem", { name: "School" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
-    expect(
-      screen.queryByRole("treeitem", { name: "Math" }),
-    ).not.toBeInTheDocument();
   });
 
   it("filters rooms by name and shows a no-results state", async () => {
@@ -1184,7 +1182,7 @@ describe("rooms UI", () => {
       } as unknown as ExcalidrawImperativeAPI,
     });
     await screen.findByRole("button", { name: "Algebra" });
-    fireEvent.click(screen.getByRole("button", { name: "New empty room" }));
+    fireEvent.click(screen.getByRole("button", { name: "New room" }));
     await waitFor(() =>
       expect(updateScene).toHaveBeenLastCalledWith({ elements, appState: {} }),
     );
@@ -1193,7 +1191,7 @@ describe("rooms UI", () => {
     );
   });
 
-  it.each(["Algebra", "New empty room"])(
+  it.each(["Algebra", "New room"])(
     "keeps the explorer open after selecting %s",
     async (label) => {
       let collaborating = false;
@@ -1242,7 +1240,7 @@ describe("rooms UI", () => {
         updateScene,
       } as unknown as ExcalidrawImperativeAPI,
     });
-    fireEvent.click(screen.getByRole("button", { name: "New empty room" }));
+    fireEvent.click(screen.getByRole("button", { name: "New room" }));
     await screen.findByRole("button", { name: "Algebra" });
     expect(startCollaboration).not.toHaveBeenCalled();
     expect(updateScene).not.toHaveBeenCalled();

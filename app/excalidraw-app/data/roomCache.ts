@@ -165,31 +165,40 @@ const writeCache = (write: () => Promise<void>) => {
   return pendingWrites;
 };
 
-export const readCachedRoomScene = async (
+const readCachedRoomField = async <Field extends "scene" | "draft">(
+  kind: Field,
   roomId: string,
   roomKey: string,
-): Promise<CachedRoomScene | null> => {
+): Promise<NonNullable<RoomMemory[Field]> | null> => {
   const meta = getRoomMeta(roomId, roomKey);
-  const resident = roomMemory.get(roomScopeKey(roomId, roomKey));
-  if (resident?.scene) {
+  const scope = roomScopeKey(roomId, roomKey);
+  const resident = roomMemory.get(scope);
+  const cached = resident?.[kind];
+  if (cached) {
     touchRoomMemory(roomId, roomKey);
-    return cloneJSON(resident.scene);
+    return cloneJSON(cached);
   }
-  const stamp = meta.scene;
+  const stamp = meta[kind];
   await pendingWrites;
-  const persisted = await readCache<CachedRoomScene>(
-    roomCacheKey("scene", roomId, roomKey),
+  const persisted = await readCache<NonNullable<RoomMemory[Field]>>(
+    roomCacheKey(kind, roomId, roomKey),
   );
-  if (meta.scene !== stamp) {
-    const live = roomMemory.get(roomScopeKey(roomId, roomKey))?.scene;
+  if (meta[kind] !== stamp) {
+    const live = roomMemory.get(scope)?.[kind];
     return live ? cloneJSON(live) : null;
   }
   if (!persisted) {
     return null;
   }
-  touchRoomMemory(roomId, roomKey).scene = persisted;
+  touchRoomMemory(roomId, roomKey)[kind] = persisted;
   return cloneJSON(persisted);
 };
+
+export const readCachedRoomScene = (
+  roomId: string,
+  roomKey: string,
+): Promise<CachedRoomScene | null> =>
+  readCachedRoomField("scene", roomId, roomKey);
 
 export const cacheRoomScene = (
   roomId: string,
@@ -247,31 +256,11 @@ export const invalidateCachedRoomScene = (roomId: string, roomKey: string) => {
   return purgeSceneRecord(roomId, roomKey);
 };
 
-export const readRoomDraft = async (
+export const readRoomDraft = (
   roomId: string,
   roomKey: string,
-): Promise<readonly SyncableExcalidrawElement[] | null> => {
-  const meta = getRoomMeta(roomId, roomKey);
-  const resident = roomMemory.get(roomScopeKey(roomId, roomKey));
-  if (resident?.draft) {
-    touchRoomMemory(roomId, roomKey);
-    return cloneJSON(resident.draft);
-  }
-  const stamp = meta.draft;
-  await pendingWrites;
-  const persisted = await readCache<readonly SyncableExcalidrawElement[]>(
-    roomCacheKey("draft", roomId, roomKey),
-  );
-  if (meta.draft !== stamp) {
-    const live = roomMemory.get(roomScopeKey(roomId, roomKey))?.draft;
-    return live ? cloneJSON(live) : null;
-  }
-  if (!persisted) {
-    return null;
-  }
-  touchRoomMemory(roomId, roomKey).draft = persisted;
-  return cloneJSON(persisted);
-};
+): Promise<readonly SyncableExcalidrawElement[] | null> =>
+  readCachedRoomField("draft", roomId, roomKey);
 
 export const saveRoomDraft = (
   roomId: string,

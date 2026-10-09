@@ -40,6 +40,7 @@ import {
   getNormalizedCanvasDimensions,
   snapScrollToDevicePixels,
 } from "./helpers";
+import { profileRender } from "./renderPerformance";
 
 import type {
   StaticCanvasRenderConfig,
@@ -518,7 +519,9 @@ const _renderStaticScene = ({
 /** throttled to animation framerate */
 export const renderStaticSceneThrottled = throttleRAF(
   (config: StaticSceneRenderConfig) => {
-    _renderStaticScene(config);
+    profileRender(config.canvas, "static", config.visibleElements.length, () =>
+      _renderStaticScene(config),
+    );
   },
 );
 
@@ -534,5 +537,10 @@ export const renderStaticScene = (
     return;
   }
 
-  _renderStaticScene(renderConfig);
+  profileRender(
+    renderConfig.canvas,
+    "static",
+    renderConfig.visibleElements.length,
+    () => _renderStaticScene(renderConfig),
+  );
 };

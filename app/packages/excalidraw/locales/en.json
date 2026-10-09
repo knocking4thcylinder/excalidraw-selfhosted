@@ -508,7 +508,13 @@
     "copied": "Copied",
     "createError": "Couldn't create the room.",
     "shareError": "Couldn't get a share code.",
-    "copyError": "Couldn't copy to clipboard."
+    "copyError": "Couldn't copy to clipboard.",
+    "untitled": "Untitled room",
+    "folderMoreActions": "More actions for folder {{name}}",
+    "moreActions": "More actions for {{name}}",
+    "moveTo": "Move to folder",
+    "live": "Live",
+    "currentRoom": "Current room"
   },
   "errorDialog": {
     "title": "Error"

@@ -250,6 +250,11 @@ const bootScript = `(() => {
     new ownerWindow.PerformanceObserver(list => list.getEntries().forEach(entry => boot.longTasks.push({started:entry.startTime, duration:entry.duration})))
       .observe({type:"longtask", buffered:true});
   }
+  if (new URL(ownerWindow.location.href).searchParams.get("androidProfile") === "1") {
+    const script = ownerWindow.document.createElement("script");
+    script.src = "/__bench/android.js";
+    ownerWindow.document.head.appendChild(script);
+  }
 })();`;
 
 const json = (response, status, value) => {
@@ -390,6 +395,7 @@ const handler = async (request, response) => {
           {
             elements: elements.length,
             plaintextBytes: Buffer.byteLength(JSON.stringify(elements)),
+            firstElementId: elements[0].id,
           },
         ]),
       ),
@@ -447,6 +453,15 @@ const handler = async (request, response) => {
       "cache-control": "no-store",
     });
     return response.end(bootScript);
+  }
+  if (address.pathname === "/__bench/android.js") {
+    response.writeHead(200, {
+      "content-type": "text/javascript",
+      "cache-control": "no-store",
+    });
+    return response.end(
+      readFileSync(path.join(__dirname, "android-profile.js")),
+    );
   }
   if (address.pathname.startsWith("/__bench/assets/")) {
     const data = assetBuffers.get(

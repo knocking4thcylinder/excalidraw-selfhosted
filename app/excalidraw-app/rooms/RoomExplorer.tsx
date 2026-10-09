@@ -4,15 +4,31 @@ import {
   LoadIcon,
   chevronDownIcon,
   chevronRight,
-  file,
-  DuplicateIcon,
 } from "@excalidraw/excalidraw/components/icons";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 
-import { getFolderDescendantIds, getFolderTree } from "./folderTree";
+import { buildExplorerEntries } from "./explorerEntries";
+import { getFolderDescendantIds } from "./folderTree";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { RoomFolder, ServerRoomEntry } from "../data/rooms";
+
+const INDENT_PX = 16;
+
+// Indentation plus one hairline per ancestor level, centred under the
+// ancestor's chevron.
+const indentStyle = (depth: number): CSSProperties => {
+  const level = Math.min(depth, 8);
+  return {
+    paddingInlineStart: `${8 + level * INDENT_PX}px`,
+    backgroundImage: level
+      ? `repeating-linear-gradient(to right, var(--rooms-guide) 0 1px, transparent 1px ${INDENT_PX}px)`
+      : undefined,
+    backgroundSize: `${level * INDENT_PX}px 100%`,
+    backgroundPosition: `${INDENT_PX}px 0`,
+    backgroundRepeat: "no-repeat",
+  };
+};
 
 export const RoomExplorer = ({
   folders,
@@ -26,7 +42,7 @@ export const RoomExplorer = ({
   onRenameFolder,
   onRenameRoom,
   renderRoom,
-  toolbar,
+  renderFolderActions,
   activeRoomId,
   renderContextMenu,
   folderDraft,
@@ -45,7 +61,7 @@ export const RoomExplorer = ({
   onRenameFolder: (folder: RoomFolder) => void;
   onRenameRoom: (room: ServerRoomEntry) => void;
   renderRoom: (room: ServerRoomEntry) => ReactNode;
-  toolbar?: ReactNode;
+  renderFolderActions?: (folder: RoomFolder) => ReactNode;
   activeRoomId?: string;
   folderDraft?: { parentId?: string };
   editingFolderId?: string;
@@ -62,30 +78,11 @@ export const RoomExplorer = ({
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
-  const folderTree = useMemo(() => getFolderTree(folders), [folders]);
   const foldersById = useMemo(
     () => new Map(folders.map((folder) => [folder.id, folder])),
     [folders],
   );
   const query = search.trim().toLocaleLowerCase();
-  const matchingRooms = rooms.filter((room) =>
-    `${room.name ?? ""} ${room.roomId}`.toLocaleLowerCase().includes(query),
-  );
-  const matchingFolderIds = new Set<string>();
-  if (query) {
-    for (const entry of folderTree) {
-      if (
-        entry.path.toLocaleLowerCase().includes(query) ||
-        matchingRooms.some((room) => room.folderId === entry.folder.id)
-      ) {
-        let ancestor: RoomFolder | undefined = entry.folder;
-        while (ancestor && !matchingFolderIds.has(ancestor.id)) {
-          matchingFolderIds.add(ancestor.id);
-          ancestor = foldersById.get(ancestor.parentId ?? "");
-        }
-      }
-    }
-  }
 
   useEffect(() => {
     setExpanded((current) => {
@@ -102,75 +99,11 @@ export const RoomExplorer = ({
     });
   }, [foldersById, selectedFolderId]);
 
-  const entries: {
-    id: string;
-    depth: number;
-    parentId?: string;
-    folder?: RoomFolder;
-    room?: ServerRoomEntry;
-    path?: string;
-    draft?: boolean;
-  }[] = [];
-  const folderIds = new Set(folders.map((folder) => folder.id));
-  const sortedRooms = [...rooms].sort((first, second) =>
-    (first.name || first.roomId).localeCompare(second.name || second.roomId),
+  const entries = useMemo(
+    () =>
+      buildExplorerEntries({ folders, rooms, search, expanded, folderDraft }),
+    [folders, rooms, search, expanded, folderDraft],
   );
-  const addRooms = (folderId: string | undefined, depth: number) => {
-    const folderMatches = folderTree.some(
-      (entry) =>
-        entry.folder.id === folderId &&
-        entry.path.toLocaleLowerCase().includes(query),
-    );
-    for (const room of sortedRooms) {
-      const parentId =
-        room.folderId && folderIds.has(room.folderId)
-          ? room.folderId
-          : undefined;
-      if (
-        parentId === folderId &&
-        (!query || folderMatches || matchingRooms.includes(room))
-      ) {
-        entries.push({ id: `room:${room.roomId}`, room, depth, parentId });
-      }
-    }
-  };
-  const parents = new Map<string, string | undefined>();
-  const ancestors: string[] = [];
-  for (const entry of folderTree) {
-    parents.set(
-      entry.folder.id,
-      entry.depth > 0 ? ancestors[entry.depth - 1] : undefined,
-    );
-    ancestors[entry.depth] = entry.folder.id;
-  }
-  const visit = (parentId: string | undefined, depth: number) => {
-    if (folderDraft && folderDraft.parentId === parentId) {
-      entries.push({ id: "draft-folder", depth, parentId, draft: true });
-    }
-    for (const entry of folderTree.filter(
-      (item) => parents.get(item.folder.id) === parentId,
-    )) {
-      if (query && !matchingFolderIds.has(entry.folder.id)) {
-        continue;
-      }
-      entries.push({
-        id: entry.folder.id,
-        folder: entry.folder,
-        depth,
-        parentId,
-        path: entry.path,
-      });
-      if (
-        query ||
-        expanded.has(entry.folder.id) ||
-        folderDraft?.parentId === entry.folder.id
-      ) {
-        visit(entry.folder.id, depth + 1);
-      }
-    }
-    addRooms(parentId, depth);
-  };
-  visit(undefined, 0);
   const tabId = entries.some((entry) => entry.id === focusedId)
     ? focusedId
     : entries[0]?.id;
@@ -219,31 +152,6 @@ export const RoomExplorer = ({
 
   return (
     <>
-      <div className="RoomsPage__treeToolbar">
-        {toolbar ?? <span>{t("myRooms.folders")}</span>}
-        <button
-          type="button"
-          className="RoomsPage__treeControl"
-          aria-label={t("myRooms.expandAll")}
-          title={t("myRooms.expandAll")}
-          disabled={disabled || !!query || folders.length === 0}
-          onClick={() =>
-            setExpanded(new Set(folders.map((folder) => folder.id)))
-          }
-        >
-          {chevronDownIcon}
-        </button>
-        <button
-          type="button"
-          className="RoomsPage__treeControl"
-          aria-label={t("myRooms.collapseAll")}
-          title={t("myRooms.collapseAll")}
-          disabled={disabled || !!query || folders.length === 0}
-          onClick={() => setExpanded(new Set())}
-        >
-          {DuplicateIcon}
-        </button>
-      </div>
       <div
         ref={treeRef}
         className="RoomsPage__tree"
@@ -268,12 +176,8 @@ export const RoomExplorer = ({
                 aria-label={t("myRooms.newFolder")}
                 aria-level={entry.depth + 1}
                 aria-selected="true"
-                className="RoomsPage__treeItem RoomsPage__treeItem--editing"
-                style={{
-                  paddingInlineStart: `${
-                    0.25 + Math.min(entry.depth, 8) * 0.75
-                  }rem`,
-                }}
+                className="RoomsPage__treeItem RoomsPage__treeItem--folder RoomsPage__treeItem--editing"
+                style={indentStyle(entry.depth)}
               >
                 <span className="RoomsPage__treeChevron" />
                 <span className="RoomsPage__folderIcon">{LoadIcon}</span>
@@ -317,20 +221,10 @@ export const RoomExplorer = ({
                   tabIndex={tabId === entry.id ? 0 : -1}
                   className={`RoomsPage__treeItem${
                     dropId === entry.id ? " RoomsPage__treeItem--drop" : ""
-                  }${entry.folder ? " RoomsPage__treeItem--folder" : ""}`}
-                  style={{
-                    paddingInlineStart: `${
-                      0.25 + Math.min(entry.depth, 8) * 0.75
-                    }rem`,
-                    backgroundImage: entry.depth
-                      ? "repeating-linear-gradient(to right, var(--dialog-border-color) 0 1px, transparent 1px 0.75rem)"
-                      : undefined,
-                    backgroundSize: `${
-                      Math.min(entry.depth, 8) * 0.75
-                    }rem 100%`,
-                    backgroundPosition: "0.75rem 0",
-                    backgroundRepeat: "no-repeat",
-                  }}
+                  }${entry.folder ? " RoomsPage__treeItem--folder" : ""}${
+                    entry.room ? " RoomsPage__treeItem--room" : ""
+                  }`}
+                  style={indentStyle(entry.depth)}
                   onFocus={() => setFocusedId(entry.id)}
                   onDragStart={(event) => {
                     if (
@@ -461,21 +355,19 @@ export const RoomExplorer = ({
                       <span className="RoomsPage__folderName">
                         {entry.folder.name}
                       </span>
-                      <span className="RoomsPage__treeCount">
-                        {
-                          rooms.filter((room) => room.folderId === entry.id)
-                            .length
-                        }
-                      </span>
+                      {!!entry.count && (
+                        <span className="RoomsPage__treeCount">
+                          {entry.count}
+                        </span>
+                      )}
                     </button>
-                  ) : (
-                    <>
-                      <span className="RoomsPage__fileIcon" aria-hidden="true">
-                        {file}
-                      </span>
-                      {renderRoom(entry.room!)}
-                    </>
+                  ) : null}
+                  {entry.folder && editingFolderId !== entry.id && (
+                    <div className="RoomsPage__rowActions">
+                      {renderFolderActions?.(entry.folder)}
+                    </div>
                   )}
+                  {entry.room && renderRoom(entry.room)}
                 </div>
               </ContextMenu.Trigger>
               {renderContextMenu?.(entry)}

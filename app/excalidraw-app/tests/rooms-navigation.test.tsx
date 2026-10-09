@@ -14,7 +14,7 @@ import {
   within,
 } from "@excalidraw/excalidraw/tests/test-utils";
 
-import type { FileId } from "@excalidraw/element/types";
+import type { ExcalidrawElement, FileId } from "@excalidraw/element/types";
 import type {
   BinaryFileData,
   DataURL,
@@ -137,6 +137,19 @@ vi.mock("socket.io-client", () => ({
   },
 }));
 
+const syncableScene = (elements: readonly ExcalidrawElement[]) =>
+  getSyncableElements(restoreElements(elements, null));
+
+const openRoom = async (
+  name: string,
+  role: "button" | "treeitem" = "button",
+) => {
+  fireEvent.click(
+    (await screen.findAllByRole("button", { name: "My rooms" }))[0],
+  );
+  fireEvent.click(await screen.findByRole(role, { name }));
+};
+
 beforeEach(async () => {
   await flushRoomCache();
   clearRoomMemoryCache();
@@ -158,21 +171,16 @@ beforeEach(async () => {
   localStorage.clear();
   window.history.replaceState({}, "", "/");
   vi.mocked(loadRoomFromServer).mockImplementation(async (roomId) =>
-    getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: `${roomId}-drawing`,
-            x: roomId === "room-a" ? 0 : 2000,
-            y: 0,
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    ),
+    syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: `${roomId}-drawing`,
+        x: roomId === "room-a" ? 0 : 2000,
+        y: 0,
+        width: 100,
+        height: 100,
+      }),
+    ]),
   );
 });
 
@@ -194,19 +202,14 @@ describe("Explorer room navigation", () => {
       mimeType: "image/png",
       created: 1,
     };
-    const elements = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "image",
-            id: "cached-drawing",
-            fileId: imageFile.id,
-            status: "saved",
-          }),
-        ],
-        null,
-      ),
-    );
+    const elements = syncableScene([
+      API.createElement({
+        type: "image",
+        id: "cached-drawing",
+        fileId: imageFile.id,
+        status: "saved",
+      }),
+    ]);
     await cacheRoomScene(room.roomId, room.roomKey, {
       etag: '"cached"',
       elements,
@@ -228,10 +231,7 @@ describe("Explorer room navigation", () => {
         return connect(options);
       });
     try {
-      fireEvent.click(
-        (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-      );
-      fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+      await openRoom("Algebra");
       await waitFor(() =>
         expect(window.h.elements[0]?.id).toBe("cached-drawing"),
       );
@@ -281,12 +281,9 @@ describe("Explorer room navigation", () => {
   it("keeps the cached preview when background connection setup fails", async () => {
     await cacheRoomScene("room-a", "AaBbCcDdEeFfGgHhIiJjKk", {
       etag: '"cached"',
-      elements: getSyncableElements(
-        restoreElements(
-          [API.createElement({ type: "rectangle", id: "cached-drawing" })],
-          null,
-        ),
-      ),
+      elements: syncableScene([
+        API.createElement({ type: "rectangle", id: "cached-drawing" }),
+      ]),
     });
     await render(<ExcalidrawApp />);
     const collab = window.collab as unknown as {
@@ -300,10 +297,7 @@ describe("Explorer room navigation", () => {
       .spyOn(collab, "startRoomConnection")
       .mockImplementationOnce(() => gate);
     try {
-      fireEvent.click(
-        (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-      );
-      fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+      await openRoom("Algebra");
       await waitFor(() =>
         expect(window.h.elements[0]?.id).toBe("cached-drawing"),
       );
@@ -323,32 +317,24 @@ describe("Explorer room navigation", () => {
     }
   });
   it("merges save conflicts without resurrecting unchanged server-removed shapes and ignores late conflicts after switching", async () => {
-    const snapshot = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "edited",
-            width: 100,
-            height: 100,
-          }),
-          API.createElement({
-            type: "rectangle",
-            id: "removed",
-            x: 200,
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
+    const snapshot = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "edited",
+        width: 100,
+        height: 100,
+      }),
+      API.createElement({
+        type: "rectangle",
+        id: "removed",
+        x: 200,
+        width: 100,
+        height: 100,
+      }),
+    ]);
     vi.mocked(loadRoomFromServer).mockResolvedValueOnce(snapshot);
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "edited",
@@ -376,21 +362,16 @@ describe("Explorer room navigation", () => {
     });
     const options = vi.mocked(saveRoomToServer).mock.calls.at(-1)?.[2];
     expect(options?.onConflict).toBeDefined();
-    const latest = getSyncableElements(
-      restoreElements(
-        [
-          baseline[0],
-          API.createElement({
-            type: "rectangle",
-            id: "remote-added",
-            x: 400,
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
+    const latest = syncableScene([
+      baseline[0],
+      API.createElement({
+        type: "rectangle",
+        id: "remote-added",
+        x: 400,
+        width: 100,
+        height: 100,
+      }),
+    ]);
     await act(async () => {
       options!.onConflict!(latest, baseline);
     });
@@ -419,18 +400,13 @@ describe("Explorer room navigation", () => {
       mimeType: "image/png",
       created: 1,
     };
-    const imageScene = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "image",
-            fileId: imageFile.id,
-            status: "pending",
-          }),
-        ],
-        null,
-      ),
-    );
+    const imageScene = syncableScene([
+      API.createElement({
+        type: "image",
+        fileId: imageFile.id,
+        status: "pending",
+      }),
+    ]);
     await cacheRoomScene("room-a", "AaBbCcDdEeFfGgHhIiJjKk", {
       etag: '"cached"',
       elements: [],
@@ -447,10 +423,7 @@ describe("Explorer room navigation", () => {
         }),
     );
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(
         window.collab.props.excalidrawAPI.getFiles()[imageFile.id]?.dataURL,
@@ -476,18 +449,13 @@ describe("Explorer room navigation", () => {
       mimeType: "image/png",
       created: 1,
     };
-    const imageScene = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "image",
-            fileId: imageFile.id,
-            status: "saved",
-          }),
-        ],
-        null,
-      ),
-    );
+    const imageScene = syncableScene([
+      API.createElement({
+        type: "image",
+        fileId: imageFile.id,
+        status: "saved",
+      }),
+    ]);
     vi.mocked(loadRoomFromServer).mockResolvedValueOnce(imageScene);
     let resolveDownload!: (
       result: Awaited<ReturnType<typeof loadFilesFromFirebase>>,
@@ -499,10 +467,7 @@ describe("Explorer room navigation", () => {
         }),
     );
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() => expect(loadFilesFromFirebase).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: "Physics" }));
     await waitFor(() =>
@@ -522,26 +487,21 @@ describe("Explorer room navigation", () => {
   });
 
   it("shows a persisted drawing before validation, preserves edits, and removes unchanged stale shapes", async () => {
-    const cached = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "cached-drawing",
-            width: 100,
-            height: 100,
-          }),
-          API.createElement({
-            type: "rectangle",
-            id: "removed-on-server",
-            width: 100,
-            height: 100,
-            x: 200,
-          }),
-        ],
-        null,
-      ),
-    );
+    const cached = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "cached-drawing",
+        width: 100,
+        height: 100,
+      }),
+      API.createElement({
+        type: "rectangle",
+        id: "removed-on-server",
+        width: 100,
+        height: 100,
+        x: 200,
+      }),
+    ]);
     await cacheRoomScene("room-a", "AaBbCcDdEeFfGgHhIiJjKk", {
       etag: '"cached"',
       elements: cached,
@@ -556,10 +516,7 @@ describe("Explorer room navigation", () => {
         }),
     );
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "cached-drawing",
@@ -591,20 +548,15 @@ describe("Explorer room navigation", () => {
     expect(saveRoomToServer).not.toHaveBeenCalled();
     await act(async () => {
       resolveSnapshot(
-        getSyncableElements(
-          restoreElements(
-            [
-              { ...cached[0], x: 30, version: 2, versionNonce: 2 },
-              API.createElement({
-                type: "rectangle",
-                id: "server-stroke",
-                width: 80,
-                height: 80,
-              }),
-            ],
-            null,
-          ),
-        ),
+        syncableScene([
+          { ...cached[0], x: 30, version: 2, versionNonce: 2 },
+          API.createElement({
+            type: "rectangle",
+            id: "server-stroke",
+            width: 80,
+            height: 80,
+          }),
+        ]),
       );
     });
     await waitFor(() => {
@@ -620,19 +572,14 @@ describe("Explorer room navigation", () => {
   });
 
   it("ignores delayed validation after leaving a cached room", async () => {
-    const cached = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "cached-a",
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
+    const cached = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "cached-a",
+        width: 100,
+        height: 100,
+      }),
+    ]);
     await cacheRoomScene("room-a", "AaBbCcDdEeFfGgHhIiJjKk", {
       etag: '"cached"',
       elements: cached,
@@ -647,10 +594,7 @@ describe("Explorer room navigation", () => {
         }),
     );
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() => expect(window.h.elements[0]?.id).toBe("cached-a"));
     fireEvent.click(await screen.findByRole("button", { name: "Physics" }));
     await waitFor(() =>
@@ -669,19 +613,14 @@ describe("Explorer room navigation", () => {
   });
 
   it("retains a cached drawing when background validation fails without uploading it", async () => {
-    const cached = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "cached-drawing",
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
+    const cached = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "cached-drawing",
+        width: 100,
+        height: 100,
+      }),
+    ]);
     await cacheRoomScene("room-a", "AaBbCcDdEeFfGgHhIiJjKk", {
       etag: '"cached"',
       elements: cached,
@@ -694,10 +633,7 @@ describe("Explorer room navigation", () => {
         }),
     );
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements[0]?.id).toBe("cached-drawing"),
     );
@@ -714,33 +650,23 @@ describe("Explorer room navigation", () => {
   });
 
   it("restores room-scoped drafts on a fresh offline boot", async () => {
-    const cached = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "cached-drawing",
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
-    const draft = getSyncableElements(
-      restoreElements(
-        [
-          ...cached,
-          API.createElement({
-            type: "rectangle",
-            id: "unsynced-stroke",
-            width: 50,
-            height: 50,
-          }),
-        ],
-        null,
-      ),
-    );
+    const cached = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "cached-drawing",
+        width: 100,
+        height: 100,
+      }),
+    ]);
+    const draft = syncableScene([
+      ...cached,
+      API.createElement({
+        type: "rectangle",
+        id: "unsynced-stroke",
+        width: 50,
+        height: 50,
+      }),
+    ]);
     await cacheRoomScene("room-a", "AaBbCcDdEeFfGgHhIiJjKk", {
       etag: '"cached"',
       elements: cached,
@@ -759,10 +685,7 @@ describe("Explorer room navigation", () => {
   });
   it("aborts a stalled download and keeps the previous drawing", async () => {
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "room-a-drawing",
@@ -800,10 +723,7 @@ describe("Explorer room navigation", () => {
 
   it("lets a slow download complete as long as it keeps making progress", async () => {
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "room-a-drawing",
@@ -839,19 +759,14 @@ describe("Explorer room navigation", () => {
     }
     await act(async () => {
       resolveSnapshot(
-        getSyncableElements(
-          restoreElements(
-            [
-              API.createElement({
-                type: "rectangle",
-                id: "slow-drawing",
-                width: 100,
-                height: 100,
-              }),
-            ],
-            null,
-          ),
-        ),
+        syncableScene([
+          API.createElement({
+            type: "rectangle",
+            id: "slow-drawing",
+            width: 100,
+            height: 100,
+          }),
+        ]),
       );
     });
     vi.useRealTimers();
@@ -865,10 +780,7 @@ describe("Explorer room navigation", () => {
   it("loads the saved drawing without waiting for the socket handshake", async () => {
     socketState.announceFirstInRoom = false;
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "room-a-drawing",
@@ -894,25 +806,17 @@ describe("Explorer room navigation", () => {
         }),
     );
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() => expect(typeof resolveSnapshot).toBe("function"));
     const createDrawing = (id: string) =>
-      getSyncableElements(
-        restoreElements(
-          [
-            API.createElement({
-              type: "rectangle",
-              id,
-              width: 100,
-              height: 100,
-            }),
-          ],
-          null,
-        ),
-      );
+      syncableScene([
+        API.createElement({
+          type: "rectangle",
+          id,
+          width: 100,
+          height: 100,
+        }),
+      ]);
     const decryptPayload = vi
       .spyOn(window.collab as any, "decryptPayload")
       .mockResolvedValue({
@@ -964,10 +868,7 @@ describe("Explorer room navigation", () => {
         }),
     );
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() => expect(typeof resolveSnapshot).toBe("function"));
     const decryptPayload = vi
       .spyOn(window.collab as any, "decryptPayload")
@@ -986,19 +887,14 @@ describe("Explorer room navigation", () => {
       expect(window.collab.portal.socketInitialized).toBe(false);
       await act(async () => {
         resolveSnapshot(
-          getSyncableElements(
-            restoreElements(
-              [
-                API.createElement({
-                  type: "rectangle",
-                  id: "saved-drawing",
-                  width: 100,
-                  height: 100,
-                }),
-              ],
-              null,
-            ),
-          ),
+          syncableScene([
+            API.createElement({
+              type: "rectangle",
+              id: "saved-drawing",
+              width: 100,
+              height: 100,
+            }),
+          ]),
         );
       });
       await waitFor(() =>
@@ -1013,10 +909,7 @@ describe("Explorer room navigation", () => {
 
   it("reports a failed snapshot request and restores the previous drawing", async () => {
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "room-a-drawing",
@@ -1038,10 +931,7 @@ describe("Explorer room navigation", () => {
   it("accepts a late live INIT when a room has no saved snapshot", async () => {
     vi.mocked(loadRoomFromServer).mockResolvedValueOnce(null);
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.collab.portal.socketInitialized).toBe(true),
     );
@@ -1050,19 +940,14 @@ describe("Explorer room navigation", () => {
       .mockResolvedValue({
         type: WS_SUBTYPES.INIT,
         payload: {
-          elements: getSyncableElements(
-            restoreElements(
-              [
-                API.createElement({
-                  type: "rectangle",
-                  id: "late-live-drawing",
-                  width: 100,
-                  height: 100,
-                }),
-              ],
-              null,
-            ),
-          ),
+          elements: syncableScene([
+            API.createElement({
+              type: "rectangle",
+              id: "late-live-drawing",
+              width: 100,
+              height: 100,
+            }),
+          ]),
         },
       });
     try {
@@ -1084,37 +969,29 @@ describe("Explorer room navigation", () => {
 
   it("frames visible drawings without zooming out to distant deleted elements", async () => {
     vi.mocked(loadRoomFromServer).mockResolvedValueOnce(
-      getSyncableElements(
-        restoreElements(
-          [
-            API.createElement({
-              type: "rectangle",
-              id: "visible-drawing",
-              x: 2000,
-              width: 100,
-              height: 100,
-            }),
-            API.createElement({
-              type: "rectangle",
-              id: "deleted-drawing",
-              x: 100_000_000,
-              width: 100,
-              height: 100,
-              isDeleted: true,
-            }),
-          ],
-          null,
-        ),
-      ),
+      syncableScene([
+        API.createElement({
+          type: "rectangle",
+          id: "visible-drawing",
+          x: 2000,
+          width: 100,
+          height: 100,
+        }),
+        API.createElement({
+          type: "rectangle",
+          id: "deleted-drawing",
+          x: 100_000_000,
+          width: 100,
+          height: 100,
+          isDeleted: true,
+        }),
+      ]),
     );
     await render(<ExcalidrawApp />);
     await act(async () => {
       window.h.app.setState({ width: 1000, height: 800 });
     });
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(
         window.h.elements.some((element) => element.id === "visible-drawing"),
@@ -1125,20 +1002,19 @@ describe("Explorer room navigation", () => {
 
   it("deletes the current room, disconnects it, and keeps its drawing locally", async () => {
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "room-a-drawing",
       ]),
     );
-    fireEvent.click(
-      within(
-        await screen.findByRole("treeitem", { name: "Algebra" }),
-      ).getByRole("button", { name: "Delete" }),
+    fireEvent.keyDown(
+      await screen.findByRole("button", {
+        name: "More actions for Algebra",
+      }),
+      { key: "ArrowDown" },
     );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
     fireEvent.click(
       within(screen.getByRole("alertdialog", { name: "Delete" })).getByRole(
         "button",
@@ -1161,10 +1037,7 @@ describe("Explorer room navigation", () => {
 
   it("loads the clicked room, keeps the Explorer open, and switches to a different drawing", async () => {
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("treeitem", { name: "Algebra" }));
+    await openRoom("Algebra", "treeitem");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "room-a-drawing",
@@ -1195,10 +1068,7 @@ describe("Explorer room navigation", () => {
 
   it("ignores an old room's delayed load after switching rooms", async () => {
     await render(<ExcalidrawApp />);
-    fireEvent.click(
-      (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+    await openRoom("Algebra");
     await waitFor(() =>
       expect(window.h.elements.map((element) => element.id)).toEqual([
         "room-a-drawing",
@@ -1236,19 +1106,14 @@ describe("Explorer room navigation", () => {
     );
     await act(async () => {
       resolveOld(
-        getSyncableElements(
-          restoreElements(
-            [
-              API.createElement({
-                type: "rectangle",
-                id: "late-room-a",
-                width: 100,
-                height: 100,
-              }),
-            ],
-            null,
-          ),
-        ),
+        syncableScene([
+          API.createElement({
+            type: "rectangle",
+            id: "late-room-a",
+            width: 100,
+            height: 100,
+          }),
+        ]),
       );
       await oldLoad;
     });
@@ -1261,19 +1126,14 @@ describe("Explorer room navigation", () => {
     const room = { roomId: "room-a", roomKey: "AaBbCcDdEeFfGgHhIiJjKk" };
     await cacheRoomScene(room.roomId, room.roomKey, {
       etag: '"cached"',
-      elements: getSyncableElements(
-        restoreElements(
-          [
-            API.createElement({
-              type: "rectangle",
-              id: "cached-drawing",
-              width: 100,
-              height: 100,
-            }),
-          ],
-          null,
-        ),
-      ),
+      elements: syncableScene([
+        API.createElement({
+          type: "rectangle",
+          id: "cached-drawing",
+          width: 100,
+          height: 100,
+        }),
+      ]),
     });
     await render(<ExcalidrawApp />);
     const collab = window.collab as unknown as {
@@ -1308,10 +1168,7 @@ describe("Explorer room navigation", () => {
         return updateScene(sceneData);
       });
     try {
-      fireEvent.click(
-        (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-      );
-      fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+      await openRoom("Algebra");
       await waitFor(() =>
         expect(window.h.elements.map((element) => element.id)).toEqual([
           "cached-drawing",
@@ -1329,19 +1186,14 @@ describe("Explorer room navigation", () => {
     await render(<ExcalidrawApp />);
     const collabAPI = appJotaiStore.get(collabAPIAtom);
     const { excalidrawAPI } = window.collab.props;
-    const elements = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "cold-drawing",
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
+    const elements = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "cold-drawing",
+        width: 100,
+        height: 100,
+      }),
+    ]);
     let collaborating = false;
     const isCollaborating = vi
       .spyOn(collabAPI!, "isCollaborating")
@@ -1362,10 +1214,7 @@ describe("Explorer room navigation", () => {
       });
     const updateScene = vi.spyOn(excalidrawAPI, "updateScene");
     try {
-      fireEvent.click(
-        (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-      );
-      fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+      await openRoom("Algebra");
       await waitFor(() =>
         expect(window.h.elements.map((element) => element.id)).toEqual([
           "cold-drawing",
@@ -1393,21 +1242,16 @@ describe("Explorer room navigation", () => {
     });
     const collabAPI = appJotaiStore.get(collabAPIAtom);
     const { excalidrawAPI } = window.collab.props;
-    const elements = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "distant-drawing",
-            x: 2000,
-            y: 0,
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
+    const elements = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "distant-drawing",
+        x: 2000,
+        y: 0,
+        width: 100,
+        height: 100,
+      }),
+    ]);
     let collaborating = false;
     const isCollaborating = vi
       .spyOn(collabAPI!, "isCollaborating")
@@ -1420,10 +1264,7 @@ describe("Explorer room navigation", () => {
       });
     const updateScene = vi.spyOn(excalidrawAPI, "updateScene");
     try {
-      fireEvent.click(
-        (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-      );
-      fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+      await openRoom("Algebra");
       await waitFor(() =>
         expect(window.h.elements.map((element) => element.id)).toEqual([
           "distant-drawing",
@@ -1449,19 +1290,14 @@ describe("Explorer room navigation", () => {
     await render(<ExcalidrawApp />);
     const collabAPI = appJotaiStore.get(collabAPIAtom);
     const { excalidrawAPI } = window.collab.props;
-    const elements = getSyncableElements(
-      restoreElements(
-        [
-          API.createElement({
-            type: "rectangle",
-            id: "installed-drawing",
-            width: 100,
-            height: 100,
-          }),
-        ],
-        null,
-      ),
-    );
+    const elements = syncableScene([
+      API.createElement({
+        type: "rectangle",
+        id: "installed-drawing",
+        width: 100,
+        height: 100,
+      }),
+    ]);
     const viewport = {
       scrollX: 120,
       scrollY: 80,
@@ -1485,10 +1321,7 @@ describe("Explorer room navigation", () => {
         return { elements, appState: viewport, scrollToContent: false };
       });
     try {
-      fireEvent.click(
-        (await screen.findAllByRole("button", { name: "My rooms" }))[0],
-      );
-      fireEvent.click(await screen.findByRole("button", { name: "Algebra" }));
+      await openRoom("Algebra");
       await waitFor(() =>
         expect(window.h.elements.map((element) => element.id)).toEqual([
           "installed-drawing",

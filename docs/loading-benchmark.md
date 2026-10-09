@@ -1,5 +1,84 @@
 # Isolated loading benchmark
 
+## Physical Android profiling
+
+The opt-in bundle now records bounded synchronous static/interactive canvas
+render samples and explicit room-switch data/file readiness. These measure
+JavaScript canvas command execution, not GPU completion or pixel presentation.
+No profiler is attached in normal builds. Samples use the canvas's owner window.
+
+`app/scripts/android-profile.js` can self-report through the isolated fixture
+server, without WebView debugging or an APK replacement. Build with
+`VITE_APP_LOADING_BENCHMARK=true`, point `VITE_APP_WS_SERVER_URL` at the isolated
+HTTPS origin, and launch `app/scripts/loading-benchmark.cjs` with matching
+`BENCH_PORT` and an isolated `BENCH_BUILD_DIR`/`BENCH_DATA_DIR`. Choose unused API
+and socket ports as well. The HTTPS certificate must be trusted by the tablet.
+
+Open the printed large-room fixture URL in the Android wrapper, adding
+`androidProfile=1` to its query string. The runner warms both synthetic rooms,
+measures three cached switches each, then performs two 120-step programmatic
+horizontal pans per scene at 10% zoom, capped at 45 seconds per pan. Partial
+samples identify their completed step count; progress is posted every ten steps.
+Hash changes are dispatched in-document
+to avoid the wrapper's external-origin navigation restriction. The result route
+stores startup, cached switches, canvas samples, animation-frame intervals,
+long tasks, errors, and a completion record in `results.json`.
+
+This is an API-driven benchmark, not touch/stylus input latency. Animation-frame
+intervals measure callback scheduling, not display FPS, and double-rAF values
+remain paint opportunities only. Scene IDs prevent a stale source scene from
+being mistaken for the destination. Readiness waits also verify fixture element
+counts, image files and absence of the validation status indicator. The first
+navigation is not a process-cold launch, and no caches are cleared automatically.
+
+Before temporarily navigating away from a real drawing, export a safety copy
+and retain its room URL locally. Return to that URL after testing. Never open
+the fixture reset route on the production origin, replace production with this
+unauthenticated runner, or interpret synthetic-scene results as real-drawing
+latency. Keep the runner reachable only by trusted test devices and shut down
+its own server/containers after collecting results.
+
+### Android observations — October 3, 2026
+
+The installed Huawei AGS6_W09 Android 10 wrapper loaded an isolated instrumented
+bundle in its existing process, using Huawei WebView/Chromium 114.0.5735.196.
+The landscape viewport was 1920 × 1200 device pixels. The fixture API and socket
+containers were separate from production; no production storage was reset.
+
+| Measurement                                               |          Samples | Result                           |
+| --------------------------------------------------------- | ---------------: | -------------------------------- |
+| Cached large-scene data/file readiness                    |       3 switches | 464 ms median (448–478 ms)       |
+| Cached image-scene data/file readiness                    |       3 switches | 1,285 ms median (1,280–1,286 ms) |
+| Large-scene synchronous static canvas work during one pan |  92 render calls | 167.5 ms median; 188.2 ms p95    |
+| Interactive overlay work in the same pan                  | 102 render calls | 0.5 ms median; 0.7 ms p95        |
+| Animation-frame callback intervals in the same pan        |    120 intervals | 366.7 ms median; 866.7 ms p95    |
+
+The measured pan completed in 46.4 seconds with all 2,400 shapes visible at 10%
+zoom. There were 148 observed long tasks, with a maximum duration of 620 ms.
+The first navigation reached scene availability at 4,137 ms; this was not a
+process-cold launch. Scene validation requests on warmed switches returned 304
+with zero scene-body bytes; server processing is not equivalent to device
+round-trip time. Switches used the actual hashchange application path, not the
+Rooms Explorer's trusted-click path, so these are not interchangeable benchmarks.
+
+Static canvas work is much more expensive than the measured interactive overlay
+in this sample. The static timing includes element traversal and synchronous
+canvas command submission; it excludes pre-render React work, asynchronous GPU
+completion, and display presentation. This narrows the investigation, but does
+not identify shape-cache misses, rasterization, GPU stalls, or a specific function
+as the root cause. Callback intervals must not be converted into display FPS.
+
+The device reported thermal status 2 during testing, so thermal conditions may
+affect these numbers. Only one large-scene pan was captured: a subsequent reload
+failed with `net::ERR_NAME_NOT_RESOLVED`, preventing a full repeated/image-pan
+series. The original production drawing was restored from its retained room URL
+and appeared from cache with an offline-waiting-for-sync indicator. A safety
+export was verified before navigation. No APK install or production deployment
+was needed. Raw results are retained locally in
+`/tmp/excalidraw-android-benchmark/profile-results.json`.
+
+## Desktop loading results
+
 Measured October 3, 2026, using the shared T3 Chromium/Electron desktop preview
 at 1280 × 800. These are synthetic-room measurements against isolated Elixir and
 Socket.IO containers, **not production results or a comparison with the old app**.
