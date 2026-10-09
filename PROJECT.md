@@ -16,18 +16,18 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
                                                ├─ Caddy :8443 (TLS, domain steamdeck.example.ts.net)
                                                ├─ excalidraw app (nginx :3000)
                                                ├─ excalidraw-room (socket.io :3002)
-                                               └─ short-code service (node :3003)
+                                               └─ rooms/short-code API (Elixir :3003)
 ```
 
 - **URL:** `https://steamdeck.example.ts.net:8443`
 - **Join a room:** full link *or* a short code like `7QU6-38SK` (server-side map,
-  codes persisted in `~/excalidraw/shortcode-data/codes.json` — this file also
-  keeps room keys, so E2E purity is traded for link brevity)
+  codes persisted in `~/excalidraw/shortcode-data/whiteboard.sqlite3` — the
+  database also keeps room keys, so E2E purity is traded for link brevity)
 - **Live sync:** the forked Excalidraw connects to the room dialect on
   `wss://...:8443/socket.io/<roomID>` — one websocket per client; mirrored
   drawing happens over that (system-socket only, no autosave)
 - **My Rooms:** server-side room registry + encrypted scene snapshots in the
-  short-code service (`rooms.json` + `scenes.json` in `~/excalidraw/shortcode-data`,
+  API service (SQLite `~/excalidraw/shortcode-data/whiteboard.sqlite3`,
   new `/api/rooms*` endpoints). The fork auto-registers a room when it becomes
   active and auto-saves encrypted snapshots (same cadence as the old firebase
   path); the ShareDialog lists rooms across devices. Note: rooms created
@@ -65,7 +65,8 @@ read credential for this private repo; otherwise sync files from the Mac).
      peer in `tailscale status`. Needed because proxy/TUN apps on the Mac
      (Happ/Xray TUN mode) hijack `100.64/10` and DNS; also adds a hosts entry
      `steamdeck.example.ts.net → 100.64.0.10`.
-   - `shortcode/server.js` — tiny HTTP service: `POST /api/code {url}` mints a
+   - `backend/` — Elixir/SQLite HTTP service (replaced the original Node
+     `shortcode/server.js`, which wrote `rooms.json`/`scenes.json`): `POST /api/code {url}` mints a
      code; `GET /api/resolve/<code>` returns the full room URL as JSON (used by
      the Join-room UI via `fetch`, deliberately *not* a page navigation to avoid
      service-worker interception); `GET /s/<code>` returns a 302 to the room.
@@ -74,7 +75,7 @@ read credential for this private repo; otherwise sync files from the Mac).
      `POST /api/rooms/<roomId>/rename` and `DELETE /api/rooms/<roomId>` (rename/delete),
      `POST /api/rooms/<roomId>/scene` + `GET /api/rooms/<roomId>/scene`
      (save/load an encrypted snapshot), `GET /api/rooms/<roomId>/scene-history`
-     — registry in `rooms.json`, snapshots in `scenes.json`. Snapshots are
+     — registry, folders, codes and snapshots in SQLite. Snapshots are
       **versioned** (last 10 kept): every overwrite pushes the previous
       snapshot to history, fetchable via `GET .../scene?slot=N` (`0` =
       current) for manual recovery. **Empty scenes never replace a non-empty

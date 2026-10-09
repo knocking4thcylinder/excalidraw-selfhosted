@@ -33,8 +33,9 @@ BASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 mkdir -p "$BASE/certs" "$BASE/shortcode-data"
 cd "$BASE"
 
-[ -f "$BASE/shortcode/server.js" ] || { echo 'Missing shortcode/server.js; use the complete repository.' >&2; exit 1; }
-cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
+[ -f "$BASE/backend/mix.exs" ] || { echo 'Missing backend/; use the complete repository.' >&2; exit 1; }
+SCENE_SYNC_ENABLED=${SCENE_SYNC_ENABLED:-$(cat "$BASE/.scene-sync-enabled" 2>/dev/null || echo false)}
+case "$SCENE_SYNC_ENABLED" in true|false) ;; *) echo 'SCENE_SYNC_ENABLED must be true or false.' >&2; exit 2 ;; esac
 
 # 0c. writable rootfs is required for /etc/systemd/system units and /etc/containers/storage.conf
 if [ "$(findmnt -n -o OPTIONS -T /etc/systemd/system | cut -d, -f1)" = ro ]; then
@@ -48,6 +49,8 @@ fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="excalidraw-selfhost"
 (cd "$HERE/app" && sudo podman build -t "$IMAGE" .)
+BACKEND_IMAGE="excalidraw-api-elixir"
+sudo podman build --layers -t "$BACKEND_IMAGE" "$BASE/backend"
 
 # 1. tailscale cert (as deck user, userspace daemon)
 cd "$BASE/certs"
@@ -56,30 +59,7 @@ chmod a+r "$FQDN".crt "$FQDN".key
 
 # 2. caddyfile
 cd "$BASE"
-cat > Caddyfile <<'EOF'
-@@FQDN@@:8443 {
-  tls /certs/@@FQDN@@.crt /certs/@@FQDN@@.key
-  handle /s/* {
-    reverse_proxy localhost:3003
-  }
-  handle /api/code* {
-    reverse_proxy localhost:3003
-  }
-  handle /api/resolve* {
-    reverse_proxy localhost:3003
-  }
-  handle /api/rooms* {
-    reverse_proxy localhost:3003
-  }
-  handle /socket.io/* {
-    reverse_proxy localhost:3002
-  }
-  handle {
-    reverse_proxy localhost:3000
-  }
-}
-EOF
-sed -i "s|@@FQDN@@|$FQDN|g" Caddyfile
+sed "s|@@FQDN@@|$FQDN|g" "$BASE/Caddyfile.template" > Caddyfile
 
 # 3. containers
 sudo systemctl stop excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service 2>/dev/null || true
@@ -105,11 +85,12 @@ sudo podman run -d --name excalidraw-caddy --restart always --network host \
   docker.io/library/caddy:2-alpine
 
 sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
+# SQLite lives in shortcode-data; JSON files from the retired Node service are
+# imported once on first start (LEGACY_DATA_DIR) and never modified.
 sudo podman run -d --name excalidraw-shortcode --restart always --network host \
-  -e PORT=3003 \
+  -e PORT=3003 -e LEGACY_DATA_DIR=/data -e SCENE_SYNC_ENABLED="$SCENE_SYNC_ENABLED" \
   -v "$BASE/shortcode-data:/data" \
-  -v "$BASE/shortcode-server.js:/srv/server.js:ro" \
-  docker.io/library/node:20-alpine node /srv/server.js
+  "$BACKEND_IMAGE"
 
 bash "$BASE/deploy.sh" start
 

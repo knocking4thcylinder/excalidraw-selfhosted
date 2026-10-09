@@ -1,31 +1,24 @@
 const assert = require("node:assert/strict");
-const { execFileSync, spawn } = require("node:child_process");
+const { execFileSync } = require("node:child_process");
 const { createCipheriv, createDecipheriv, randomBytes } = require("node:crypto");
-const { once } = require("node:events");
-const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { mkdtempSync, mkdirSync, rmSync } = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const { setTimeout: delay } = require("node:timers/promises");
 
-test("encrypted patches survive restart, reduce cached transfers and export safely to Node", {
+test("encrypted patches survive restart, reduce cached transfers and export losslessly", {
   skip: process.env.RUN_BACKEND_CONTAINER_TESTS !== "1",
 }, async (context) => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "whiteboard-sync-release-"));
   const name = `whiteboard-sync-test-${process.pid}`;
   const image = process.env.BACKEND_IMAGE || "excalidraw-api-elixir";
   const podman = (...args) => execFileSync("sudo", ["-n", "podman", ...args], { encoding: "utf8", timeout: 60000 });
-  let nodeBackend;
-  context.after(async () => {
-    if (nodeBackend && nodeBackend.exitCode === null && nodeBackend.signalCode === null) {
-      const exited = once(nodeBackend, "exit");
-      nodeBackend.kill();
-      await exited;
-    }
+  context.after(() => {
     try { podman("rm", "-f", name); } finally { rmSync(directory, { recursive: true, force: true }); }
   });
-  for (const folder of ["data", "export", "node"]) mkdirSync(path.join(directory, folder));
+  for (const folder of ["data", "export"]) mkdirSync(path.join(directory, folder));
   const listener = net.createServer();
   await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
   const port = listener.address().port;
@@ -106,24 +99,9 @@ test("encrypted patches survive restart, reduce cached transfers and export safe
   podman("run", "--rm", "--network", "host", "-e", `PORT=${port}`, "-e", "ERL_FLAGS=+S 4:4",
     "-e", "RELEASE_DISTRIBUTION=none",
     "-v", `${directory}/data:/data`, "-v", `${directory}/export:/export`, image,
-    "/srv/bin/whiteboard", "eval", '{:ok, _} = Application.ensure_all_started(:whiteboard); Whiteboard.Export.run!("/export", legacy: true)');
-  for (const filename of ["rooms.json", "scenes.json", "folders.json", "codes.json"]) {
-    const body = podman("run", "--rm", "-v", `${directory}/export:/export:ro`, image, "cat", `/export/${filename}`);
-    writeFileSync(path.join(directory, "node", filename), body, { mode: 0o600 });
-    if (filename === "scenes.json") {
-      const scene = JSON.parse(body).room;
-      assert.deepEqual(decrypted(scene), finalElements);
-      assert.equal(scene.patches, undefined);
-      assert.deepEqual(decrypted(scene.history[0]), expected);
-      assert.equal(scene.history[0].patches, undefined);
-    }
-  }
-  nodeBackend = spawn(process.execPath, [path.resolve(__dirname, "../../shortcode/server.js")], {
-    env: { ...process.env, PORT: String(port), ...Object.fromEntries(["ROOMS", "SCENES", "FOLDERS", "CODES"].map((kind) => [`${kind}_FILE`, path.join(directory, "node", `${kind.toLowerCase()}.json`)])) },
-    stdio: "ignore",
-  });
-  await ready();
-  const legacy = await fetch(`${base}/api/rooms/room/scene?key=${key}`);
-  assert.equal(legacy.status, 200);
-  assert.deepEqual(decrypted(await legacy.json()), finalElements);
+    "/srv/bin/whiteboard", "eval", '{:ok, _} = Application.ensure_all_started(:whiteboard); Whiteboard.Export.run!("/export")');
+  const scene = JSON.parse(podman("run", "--rm", "-v", `${directory}/export:/export:ro`, image, "cat", "/export/scenes.json")).room;
+  assert.equal(scene.patches.length, 1);
+  assert.deepEqual(replay(scene), finalElements);
+  assert.deepEqual(replay(scene.history[0]), expected);
 });

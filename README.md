@@ -27,7 +27,9 @@ graph LR
 | Path                        | Purpose                                                                                                                                                                                      |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `install.sh`                | **Deck**: full canonical installer — storage (vfs on `/home`), Tailscale cert, Caddy TLS `:8443`, app + room + short-code services, systemd units, verification. Idempotent; safe to re-run. |
-| `shortcode/server.js`       | tiny HTTP service minting/joining short codes (map persisted in `~/excalidraw/shortcode-data/codes.json` — **contains room keys**, deleting it revokes all codes)                            |
+| `Caddyfile.template`        | Shared HTTPS routes rendered by both installation and full redeployment; edit this rather than the generated `Caddyfile`. |
+| `backend/`                  | Elixir/SQLite API on `:3003`: short codes, room registry, folders, encrypted scene snapshots (database in `~/excalidraw/shortcode-data/whiteboard.sqlite3` — **contains room keys**). See `backend/README.md`. |
+| `tools/restore-room.js`     | admin CLI: re-encrypt a local `.excalidraw` export and upload it as a room's current snapshot                                                                                            |
 | `mac/install-mac.sh`        | Mac: installs the LaunchDaemon route fixer + `/etc/hosts` entry (interactive prompt for the Deck FQDN / tailnet IP)                                                                          |
 | `mac/fix_ts_routes.sh`      | asserts a `/32` route per tailnet peer every 20 s (beats proxy/TUN apps like Happ)                                                                                                           |
 | `mac/com.fixtsroutes.plist` | LaunchDaemon definition (`user.fixtsroutes`)                                                                                                                                                 |
@@ -80,16 +82,18 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
   per-peer `/32` route daemon + hosts entry neutralize both
 - Rooms are E2E-encrypted; the short-code map trades a bit of that
   (it stores room keys server-side) for shorter links — delete
-  `shortcode-data/codes.json` at any time to revoke
+  short codes from the SQLite database to revoke them: stop
+  `excalidraw-shortcode`, then run
+  `sqlite3 shortcode-data/whiteboard.sqlite3 "DELETE FROM records WHERE kind = 'codes'"`
 
 ## Repo layout (monorepo)
 
-This repo is the whole project: packaging (`install.sh`, `shortcode/`,
+This repo is the whole project: packaging (`install.sh`, `backend/`, `tools/`,
 `mac/`, `android/`) plus the app source under `app/` (the former
 `excalidraw-selfhosted-fork`, merged as a git subtree with full history —
 see `git log -- app`). `~/excalidraw` on the Deck IS this repo's checkout
-(branch `master`); runtime files (`shortcode-data/`, `certs/`, `Caddyfile`,
-`shortcode-server.js`) live next to it, gitignored, never committed.
+(branch `master`); runtime files (`shortcode-data/`, `certs/`, `Caddyfile`)
+live next to it, gitignored, never committed.
 
 Pulling upstream Excalidraw into `app/` later:
 
@@ -115,7 +119,7 @@ For smaller updates, deploy only the affected component:
 
 ```bash
 ./deploy.sh app       # build/swap frontend only; leave backend and proxy running
-./deploy.sh backend   # update the selected API backend; no frontend build
+./deploy.sh backend   # rebuild/swap the Elixir API; no frontend build
 ./deploy.sh full      # default: frontend + shortcode backend + proxy routes
 ./deploy.sh app --local  # deploy working-tree files without git pull
 ```
@@ -123,12 +127,11 @@ For smaller updates, deploy only the affected component:
 Selective modes still pull the whole checkout unless `--local` is passed, but
 only deploy the selected component. Use `full` for changes spanning components
 or proxy routes. `backend` updates the shortcode/rooms API, not the external
-`excalidraw-room` collaboration image or the standalone root `server.js`.
-The default API backend remains Node. Opt in to the compatible Phoenix/SQLite
-backend with `BACKEND_ENGINE=elixir ./deploy.sh backend --local`; subsequent
-deployments retain the selection. See `backend/README.md` for preview, JSON
-import, backups, and rollback precautions. This does not yet implement
-local-first frontend loading or incremental scene transfers.
+`excalidraw-room` collaboration image. The API backend is the Elixir/SQLite
+service in `backend/`; the former Node service has been retired. On a Deck
+still running Node, the first backend deployment imports its JSON files into
+SQLite once and restores the old container if the health checks fail. See
+`backend/README.md` for preview, JSON import, backups, and recovery.
 Each deployment prints stage timings, including dependency and frontend builds.
 On Podman's `vfs` driver, builds automatically use a reusable, pinned Node
 container with a host-mounted `.build-cache/` workspace. Source files are synced
@@ -238,18 +241,17 @@ also deletes its cached images and blocks late attachment writes.
 Attachments remain until their room is explicitly deleted (even if its
 confirmed snapshot is evicted), to preserve recovery drafts; large image
 libraries can consume browser storage. Cache failures fall back to downloads.
-Local caching works with both the Node and Elixir API backends. Uncached
+Local caching works with any API configuration. Uncached
 images/fonts/features may still need the network.
 The Elixir backend additionally supports opt-in encrypted partial updates:
-`SCENE_SYNC_ENABLED=true BACKEND_ENGINE=elixir ./deploy.sh backend --local`.
+`SCENE_SYNC_ENABLED=true ./deploy.sh backend --local`.
 Update the app and refresh clients before enabling it. Small edits upload only
 changed shapes, removed IDs, and ordering when needed; cached-room downloads
 request only patches since the confirmed ETag. Revision checks prevent stale
 writers from overwriting concurrent saves, and periodic full checkpoints bound
-the patch chain. Node and default Elixir deployments retain full snapshots.
+the patch chain. Deployments without the flag retain full snapshots.
 Old clients cannot read active patch chains and are rejected safely. See
-`backend/README.md` for protocol limits and the compacted export required for
-Node rollback.
+`backend/README.md` for protocol limits.
 See `docs/loading-benchmark.md` for isolated loading measurements, limitations,
 and instructions for reproducing cold-data, cached, and partial-update runs.
 Downloads time out after 20 seconds without receiving data, rather than after

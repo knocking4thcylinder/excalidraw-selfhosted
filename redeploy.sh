@@ -13,8 +13,6 @@ if [ "$#" -gt 0 ]; then shift; fi
 LOCAL=false
 if [ "${1:-}" = --local ]; then LOCAL=true; shift; fi
 [ "$#" -eq 0 ] || { echo 'Usage: ./redeploy.sh [full|app|backend] [--local]' >&2; exit 2; }
-BACKEND_ENGINE=${BACKEND_ENGINE:-$(cat "$BASE/.backend-engine" 2>/dev/null || echo node)}
-case "$BACKEND_ENGINE" in node|elixir) ;; *) echo 'BACKEND_ENGINE must be node or elixir.' >&2; exit 2 ;; esac
 BACKEND_IMAGE=${BACKEND_IMAGE:-excalidraw-api-elixir}
 SCENE_SYNC_ENABLED=${SCENE_SYNC_ENABLED:-$(cat "$BASE/.scene-sync-enabled" 2>/dev/null || echo false)}
 case "$SCENE_SYNC_ENABLED" in true|false) ;; *) echo 'SCENE_SYNC_ENABLED must be true or false.' >&2; exit 2 ;; esac
@@ -60,7 +58,7 @@ if [ "$MODE" != backend ]; then
   bash "$BASE/deploy.sh" build
 fi
 
-if [ "$MODE" != app ] && [ "$BACKEND_ENGINE" = elixir ]; then
+if [ "$MODE" != app ]; then
   stage 'Elixir backend image build'
   sudo podman build --layers -t "$BACKEND_IMAGE" "$BASE/backend"
 fi
@@ -88,65 +86,27 @@ trap restore_services ERR
 if [ "$MODE" != app ]; then
   stage 'shortcode backend (persisted data retained)'
   sudo systemctl stop excalidraw-shortcode.service
-  if [ "$BACKEND_ENGINE" = elixir ]; then
-    BACKUP="$BASE/recovery/backend-$(date +%Y%m%d-%H%M%S)-$$"
-    mkdir -p "$BACKUP"
-    chmod 700 "$BACKUP"
-    sudo cp -a "$BASE/shortcode-data" "$BACKUP/data"
-    echo "Backend data backup: $BACKUP/data"
-    if [ ! -e "$BASE/shortcode-data/whiteboard.sqlite3" ]; then NEW_BACKEND_DATABASE=true; fi
-  else
-    cp "$BASE/shortcode/server.js" "$BASE/shortcode-server.js"
-  fi
-  if [ "$BACKEND_ENGINE" = elixir ]; then
-    previous_name="excalidraw-shortcode-previous-$$"
-    sudo podman rename excalidraw-shortcode "$previous_name"
-    PREVIOUS_BACKEND=$previous_name
-  else
-    sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
-  fi
   mkdir -p "$BASE/shortcode-data"
-  if [ "$BACKEND_ENGINE" = elixir ]; then
-    sudo podman create --name excalidraw-shortcode --restart always --network host \
-      -e PORT=3003 -e LEGACY_DATA_DIR=/data -e SCENE_SYNC_ENABLED="$SCENE_SYNC_ENABLED" \
-      -v "$BASE/shortcode-data:/data" \
-      "$BACKEND_IMAGE"
-  else
-    sudo podman create --name excalidraw-shortcode --restart always --network host \
-      -e PORT=3003 \
-      -v "$BASE/shortcode-data:/data" \
-      -v "$BASE/shortcode-server.js:/srv/server.js:ro" \
-      docker.io/library/node:20-alpine node /srv/server.js
-  fi
+  BACKUP="$BASE/recovery/backend-$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "$BACKUP"
+  chmod 700 "$BACKUP"
+  sudo cp -a "$BASE/shortcode-data" "$BACKUP/data"
+  echo "Backend data backup: $BACKUP/data"
+  if [ ! -e "$BASE/shortcode-data/whiteboard.sqlite3" ]; then NEW_BACKEND_DATABASE=true; fi
+  previous_name="excalidraw-shortcode-previous-$$"
+  sudo podman rename excalidraw-shortcode "$previous_name"
+  PREVIOUS_BACKEND=$previous_name
+  sudo podman create --name excalidraw-shortcode --restart always --network host \
+    -e PORT=3003 -e LEGACY_DATA_DIR=/data -e SCENE_SYNC_ENABLED="$SCENE_SYNC_ENABLED" \
+    -v "$BASE/shortcode-data:/data" \
+    "$BACKEND_IMAGE"
   sudo systemctl start excalidraw-shortcode.service
 fi
 
 if [ "$MODE" = full ]; then
   stage 'caddy routes'
   CADDY_CONFIG=$(mktemp)
-  cat > "$CADDY_CONFIG" <<CDATA
-$FQDN:8443 {
-  tls /certs/$FQDN.crt /certs/$FQDN.key
-  handle /s/* {
-    reverse_proxy localhost:3003
-  }
-  handle /api/code* {
-    reverse_proxy localhost:3003
-  }
-  handle /api/resolve* {
-    reverse_proxy localhost:3003
-  }
-  handle /api/rooms* {
-    reverse_proxy localhost:3003
-  }
-  handle /socket.io/* {
-    reverse_proxy localhost:3002
-  }
-  handle {
-    reverse_proxy localhost:3000
-  }
-}
-CDATA
+  sed "s|@@FQDN@@|$FQDN|g" "$BASE/Caddyfile.template" > "$CADDY_CONFIG"
   if ! cmp -s "$CADDY_CONFIG" "$BASE/Caddyfile"; then
     cat "$CADDY_CONFIG" > "$BASE/Caddyfile"
     sudo systemctl restart excalidraw-caddy.service
@@ -175,7 +135,6 @@ if [ "$MODE" != backend ]; then
 fi
 stage 'HTTPS checks'
 bash "$BASE/deploy.sh" check
-if [ "$MODE" != app ]; then printf '%s\n' "$BACKEND_ENGINE" > "$BASE/.backend-engine"; fi
 if [ "$MODE" != app ]; then printf '%s\n' "$SCENE_SYNC_ENABLED" > "$BASE/.scene-sync-enabled"; fi
 if [ -n "$PREVIOUS_BACKEND" ]; then sudo podman rm -f "$PREVIOUS_BACKEND" || true; fi
 printf 'TIMING: HTTPS checks: %ss\n' "$((SECONDS - STAGE_STARTED))"

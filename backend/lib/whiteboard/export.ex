@@ -1,7 +1,7 @@
 defmodule Whiteboard.Export do
-  alias Whiteboard.Store
+  alias Whiteboard.{Scenes, Store}
 
-  def run!(directory, options \\ []) do
+  def run!(directory) do
     File.mkdir_p!(directory)
 
     documents =
@@ -14,7 +14,7 @@ defmodule Whiteboard.Export do
               value =
                 case kind do
                   "codes" -> value["url"]
-                  "scenes" -> export_scene(id, options)
+                  "scenes" -> Scenes.export(Scenes.get(id))
                   _ -> value
                 end
 
@@ -29,21 +29,6 @@ defmodule Whiteboard.Export do
       path = Path.join(directory, "#{kind}.json")
       File.write!(path, body, [:exclusive])
       File.chmod!(path, 0o600)
-    end
-  end
-
-  defp export_scene(id, options) do
-    scene = Whiteboard.Scenes.export(Whiteboard.Scenes.get(id))
-
-    if Keyword.get(options, :legacy, false) do
-      key = Store.get("rooms", id)["key"]
-      scene = Whiteboard.LegacySnapshot.compact(scene, key)
-
-      Map.update!(scene, "history", fn history ->
-        Enum.map(history, &Whiteboard.LegacySnapshot.compact(&1, key))
-      end)
-    else
-      scene
     end
   end
 end

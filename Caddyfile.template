@@ -1,0 +1,21 @@
+@@FQDN@@:8443 {
+  tls /certs/@@FQDN@@.crt /certs/@@FQDN@@.key
+  handle /s/* {
+    reverse_proxy localhost:3003
+  }
+  handle /api/code* {
+    reverse_proxy localhost:3003
+  }
+  handle /api/resolve* {
+    reverse_proxy localhost:3003
+  }
+  handle /api/rooms* {
+    reverse_proxy localhost:3003
+  }
+  handle /socket.io/* {
+    reverse_proxy localhost:3002
+  }
+  handle {
+    reverse_proxy localhost:3000
+  }
+}

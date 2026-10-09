@@ -1,5 +1,6 @@
 fork.bundle
 # Deck runtime files (live in ~/excalidraw next to the checkout, never committed)
+# retired Node backend copy; delete after the Elixir cutover
 shortcode-server.js
 shortcode-data/
 Caddyfile
@@ -8,6 +9,5 @@ reinstall.sh
 fork/
 .deploy.lock
 .build-cache/
-.backend-engine
 .scene-sync-enabled
 /AGENTS.md

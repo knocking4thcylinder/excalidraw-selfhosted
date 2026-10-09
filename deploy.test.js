@@ -11,10 +11,10 @@ function fixture(context) {
   context.after(() => rmSync(directory, { recursive: true, force: true }));
   const bin = path.join(directory, ".local/bin");
   mkdirSync(bin, { recursive: true });
-  for (const name of ["app", "backend", "shortcode", "shortcode-data", "units"]) {
+  for (const name of ["app", "backend", "shortcode-data", "units"]) {
     mkdirSync(path.join(directory, name));
   }
-  for (const name of ["deploy.sh", "redeploy.sh"]) {
+  for (const name of ["deploy.sh", "redeploy.sh", "Caddyfile.template"]) {
     copyFileSync(path.join(__dirname, name), path.join(directory, name));
   }
   copyFileSync(path.join(__dirname, "app/Dockerfile"), path.join(directory, "app/Dockerfile"));
@@ -22,7 +22,6 @@ function fixture(context) {
     mkdirSync(path.dirname(path.join(directory, "app", name)), { recursive: true });
     writeFileSync(path.join(directory, "app", name), "fixture\n");
   }
-  writeFileSync(path.join(directory, "shortcode/server.js"), "new backend\n");
   writeFileSync(path.join(directory, "shortcode-data/codes.json"), "persisted data\n");
   writeFileSync(path.join(directory, "Caddyfile"), "old config\n");
   const mock = path.join(directory, "mock.cjs");
@@ -93,6 +92,10 @@ function includesCommand(commands, ...prefix) {
   return commands.some((command) => prefix.every((value, index) => command[index] === value));
 }
 
+function imageBuilds(commands, image) {
+  return commands.filter((command) => command[0] === "podman" && command[1] === "build" && command.includes(image)).length;
+}
+
 test("app deploy builds dependencies and frontend without touching backend or proxy", (context) => {
   const setup = fixture(context);
   const result = setup.run(["app", "--local"]);
@@ -103,6 +106,7 @@ test("app deploy builds dependencies and frontend without touching backend or pr
   assert.ok(includesCommand(commands, "systemctl", "stop", "excalidraw.service"));
   assert.ok(includesCommand(commands, "podman", "create", "--name", "excalidraw"));
   assert.ok(!includesCommand(commands, "systemctl", "stop", "excalidraw-shortcode.service"));
+  assert.equal(imageBuilds(commands, "excalidraw-api-elixir"), 0);
   assert.ok(!includesCommand(commands, "systemctl", "restart", "excalidraw-caddy.service"));
   assert.ok(!includesCommand(commands, "podman", "image", "prune"));
   assert.ok(!includesCommand(commands, "git", "pull"));
@@ -112,16 +116,18 @@ test("app deploy builds dependencies and frontend without touching backend or pr
   assert.equal(readFileSync(path.join(setup.directory, "Caddyfile"), "utf8"), "old config\n");
 });
 
-test("backend deploy skips all builds and retains persisted data", (context) => {
+test("backend deploy builds only the Elixir image and retains persisted data", (context) => {
   const setup = fixture(context);
   const result = setup.run(["backend", "--local"]);
   assert.equal(result.status, 0, result.stderr);
   const commands = setup.commands();
-  assert.ok(!includesCommand(commands, "podman", "build"));
+  assert.equal(commands.filter((command) => command[0] === "podman" && command[1] === "build").length, 1);
+  assert.equal(imageBuilds(commands, "excalidraw-api-elixir"), 1);
   assert.ok(!includesCommand(commands, "systemctl", "stop", "excalidraw.service"));
   assert.ok(!includesCommand(commands, "systemctl", "restart", "excalidraw-caddy.service"));
   assert.ok(includesCommand(commands, "podman", "create", "--name", "excalidraw-shortcode"));
-  assert.equal(readFileSync(path.join(setup.directory, "shortcode-server.js"), "utf8"), "new backend\n");
+  assert.ok(!commands.some((command) => command.some((argument) => argument.includes("node:20-alpine") || argument.includes("shortcode-server.js"))));
+  assert.ok(!existsSync(path.join(setup.directory, "shortcode-server.js")));
   assert.equal(readFileSync(path.join(setup.directory, "shortcode-data/codes.json"), "utf8"), "persisted data\n");
 });
 
@@ -134,6 +140,15 @@ test("default deploy pulls checkout and deploys both components", (context) => {
   assert.ok(includesCommand(commands, "podman", "create", "--name", "excalidraw"));
   assert.ok(includesCommand(commands, "podman", "create", "--name", "excalidraw-shortcode"));
   assert.ok(includesCommand(commands, "systemctl", "restart", "excalidraw-caddy.service"));
+  const config = readFileSync(path.join(setup.directory, "Caddyfile"), "utf8");
+  assert.match(config, /^test\.example:8443 \{/);
+  assert.match(config, /tls \/certs\/test\.example\.crt \/certs\/test\.example\.key/);
+  assert.deepEqual([...config.matchAll(/handle (\S+) \{\s+reverse_proxy localhost:(\d+)/g)].map((match) => match.slice(1)), [
+    ["/s/*", "3003"], ["/api/code*", "3003"], ["/api/resolve*", "3003"],
+    ["/api/rooms*", "3003"], ["/socket.io/*", "3002"],
+  ]);
+  assert.match(config, /handle \{\s+reverse_proxy localhost:3000/);
+  assert.ok(!config.includes("@@FQDN@@"));
   assert.match(result.stdout, /TIMING: total full deploy:/);
 });
 
@@ -203,7 +218,7 @@ test("deployment repairs missing units and installs cleanup scheduling", (contex
   assert.equal(result.status, 0, result.stderr);
   assert.ok(existsSync(path.join(setup.directory, "units/excalidraw-cleanup.timer")));
   assert.ok(includesCommand(setup.commands(), "systemctl", "daemon-reload"));
-  assert.ok(!includesCommand(setup.commands(), "podman", "build"));
+  assert.equal(imageBuilds(setup.commands(), "excalidraw-selfhost"), 0);
 });
 
 test("build and cleanup refuse to run under another deployment's lock", async (context) => {
@@ -293,9 +308,9 @@ test("runtime image uses the same pinned nginx base as the multi-stage build", (
   assert.ok(runtime.includes("COPY build/ /usr/share/nginx/html"));
 });
 
-test("Elixir backend opt-in builds before stopping, backs up data and retains selection", (context) => {
+test("Elixir backend builds before stopping and backs up data", (context) => {
   const setup = fixture(context);
-  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir" });
+  const result = setup.run(["backend", "--local"]);
   assert.equal(result.status, 0, result.stderr);
   const commands = setup.commands();
   const buildIndex = commands.findIndex((command) => command[0] === "podman" && command[1] === "build");
@@ -306,25 +321,22 @@ test("Elixir backend opt-in builds before stopping, backs up data and retains se
   assert.ok(created.includes("excalidraw-api-elixir"));
   assert.ok(created.includes("LEGACY_DATA_DIR=/data"));
   assert.ok(created.includes("SCENE_SYNC_ENABLED=false"));
-  assert.ok(!created.includes("docker.io/library/node:20-alpine"));
-  assert.equal(readFileSync(path.join(setup.directory, ".backend-engine"), "utf8"), "elixir\n");
   assert.equal(readFileSync(path.join(setup.directory, "shortcode-data/codes.json"), "utf8"), "persisted data\n");
   assert.equal(setup.run(["backend", "--local"]).status, 0);
   assert.equal(setup.commands().filter((command) => command[0] === "podman" && command[1] === "build").length, 2);
 });
 
-test("failed Elixir build leaves the old service and engine selection untouched", (context) => {
+test("failed Elixir build leaves the old service untouched", (context) => {
   const setup = fixture(context);
-  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir", MOCK_FAIL_BUILD: "1" });
+  const result = setup.run(["backend", "--local"], { MOCK_FAIL_BUILD: "1" });
   assert.notEqual(result.status, 0);
   assert.ok(!includesCommand(setup.commands(), "systemctl", "stop"));
   assert.ok(!includesCommand(setup.commands(), "podman", "rm"));
-  assert.ok(!existsSync(path.join(setup.directory, ".backend-engine")));
 });
 
 test("scene sync opt-in persists across successful backend deployments", (context) => {
   const setup = fixture(context);
-  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir", SCENE_SYNC_ENABLED: "true" });
+  const result = setup.run(["backend", "--local"], { SCENE_SYNC_ENABLED: "true" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(readFileSync(path.join(setup.directory, ".scene-sync-enabled"), "utf8"), "true\n");
   assert.equal(setup.run(["backend", "--local"]).status, 0);
@@ -340,26 +352,9 @@ test("scene sync validation runs before changing services", (context) => {
   assert.deepEqual(setup.commands(), []);
 });
 
-test("backend engine validation runs before changing services", (context) => {
-  const setup = fixture(context);
-  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "invalid" });
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /BACKEND_ENGINE must be/);
-  assert.deepEqual(setup.commands(), []);
-});
-
-test("explicit Node selection overrides a remembered Elixir selection", (context) => {
-  const setup = fixture(context);
-  writeFileSync(path.join(setup.directory, ".backend-engine"), "elixir\n");
-  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "node" });
-  assert.equal(result.status, 0, result.stderr);
-  assert.ok(!includesCommand(setup.commands(), "podman", "build"));
-  assert.equal(readFileSync(path.join(setup.directory, ".backend-engine"), "utf8"), "node\n");
-});
-
 test("failed Elixir health check restores the previous backend container", (context) => {
   const setup = fixture(context);
-  const result = setup.run(["backend", "--local"], { BACKEND_ENGINE: "elixir", MOCK_FAIL_CHECK: "1", MOCK_NEW_DATABASE: "1" });
+  const result = setup.run(["backend", "--local"], { MOCK_FAIL_CHECK: "1", MOCK_NEW_DATABASE: "1" });
   assert.notEqual(result.status, 0);
   const renames = setup.commands().filter((command) => command[0] === "podman" && command[1] === "rename");
   assert.equal(renames.length, 2);
@@ -367,5 +362,4 @@ test("failed Elixir health check restores the previous backend container", (cont
   assert.equal(renames[1][2], renames[0][3]);
   assert.equal(renames[1][3], "excalidraw-shortcode");
   assert.ok(includesCommand(setup.commands(), "mv", path.join(setup.directory, "shortcode-data/whiteboard.sqlite3")));
-  assert.ok(!existsSync(path.join(setup.directory, ".backend-engine")));
 });
