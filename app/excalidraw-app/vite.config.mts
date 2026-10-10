@@ -130,6 +130,16 @@ export default defineConfig(({ mode }) => {
               return `locales/${id.substring(index + 8)}`;
             }
 
+            // Rollup hoists these runtime helpers into the first chunk that
+            // needs them. Left alone they land in the mermaid chunk, and the
+            // entry then preloads ~580 KB of mermaid on every startup.
+            if (
+              id.includes("vite/preload-helper") ||
+              id.includes("commonjsHelpers")
+            ) {
+              return "runtime-helpers";
+            }
+
             if (id.includes("@excalidraw/mermaid-to-excalidraw")) {
               return "mermaid-to-excalidraw";
             }
