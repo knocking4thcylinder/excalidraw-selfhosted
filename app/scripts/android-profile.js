@@ -42,13 +42,16 @@
         }),
       })
       .then((response) => {
-        if (!response.ok)
+        if (!response.ok) {
           throw new Error(`Result upload failed: ${response.status}`);
+        }
       });
   const run = async () => {
     await post("boot", {});
     const configResponse = await ownerWindow.fetch("/__bench/metrics");
-    if (!configResponse.ok) throw new Error("Fixture metadata unavailable");
+    if (!configResponse.ok) {
+      throw new Error("Fixture metadata unavailable");
+    }
     const config = await configResponse.json();
     const roomNames = ["benchmark-large", "benchmark-images"];
     const roomKey = ownerWindow.location.hash.split(",")[1];
@@ -106,7 +109,9 @@
     }
     await post("cached-switches", { snapshot: benchmark.snapshot() });
     for (const room of roomNames) {
-      if (room !== "benchmark-large") await switchRoom(room, "pan-fixture");
+      if (room !== "benchmark-large") {
+        await switchRoom(room, "pan-fixture");
+      }
       const originalState = benchmark.api.getAppState();
       benchmark.api.updateScene({
         appState: { scrollX: 0, scrollY: 0, zoom: { value: 0.1 } },

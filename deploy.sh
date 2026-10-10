@@ -66,12 +66,12 @@ build_fast() {
     (cd "$cache/source" && sha256sum package.json yarn.lock .npmrc excalidraw-app/package.json packages/*/package.json)
   } | sha256sum | awk '{print $1}')
   if [ "$dependency_hash" != "$(cat "$cache/dependencies.sha256" 2>/dev/null || true)" ] || [ ! -f "$cache/source/node_modules/.yarn-integrity" ]; then
-    timed 'dependency installation' sudo podman exec -e HUSKY=0 excalidraw-builder yarn --frozen-lockfile --network-timeout 600000
+    timed 'dependency installation' sudo podman exec -e HUSKY=0 -e NODE_OPTIONS=--no-deprecation excalidraw-builder yarn --frozen-lockfile --silent --network-timeout 600000
     printf '%s\n' "$dependency_hash" > "$cache/dependencies.sha256"
   else
     echo 'Dependencies unchanged; installation skipped.'
   fi
-  timed 'frontend compilation' sudo podman exec -e NODE_ENV=production excalidraw-builder yarn build:app:docker
+  timed 'frontend compilation' sudo podman exec -e NODE_ENV=production -e NODE_OPTIONS=--no-deprecation -e BROWSERSLIST_IGNORE_OLD_DATA=1 excalidraw-builder yarn build:app:docker
   timed 'runtime image' sudo podman build --layers -f "$BASE/app/Dockerfile.runtime" -t "$APP_IMAGE" "$cache/source/excalidraw-app"
 }
 

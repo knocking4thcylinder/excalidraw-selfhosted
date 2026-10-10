@@ -107,6 +107,17 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: "build",
       rollupOptions: {
+        onwarn(warning, warn) {
+          // Radix and jotai ship "use client" directives for RSC bundlers;
+          // Rollup drops them harmlessly, but logs ~40 warnings per build.
+          if (
+            warning.code === "MODULE_LEVEL_DIRECTIVE" ||
+            warning.code === "SOURCEMAP_ERROR"
+          ) {
+            return;
+          }
+          warn(warning);
+        },
         output: {
           assetFileNames(chunkInfo) {
             if (chunkInfo?.name?.endsWith(".woff2")) {
@@ -151,6 +162,8 @@ export default defineConfig(({ mode }) => {
         },
       },
       sourcemap: true,
+      // The ~2.1 MB main bundle is precached for offline use by design.
+      chunkSizeWarningLimit: 2500,
       // don't auto-inline small assets (i.e. fonts hosted on CDN)
       assetsInlineLimit: 0,
     },
