@@ -27,7 +27,6 @@
   },
   "dependencies": {
     "@excalidraw/random-username": "1.0.0",
-    "@sentry/browser": "9.0.1",
     "callsites": "4.2.0",
     "firebase": "11.3.1",
     "i18next-browser-languagedetector": "6.1.4",
@@ -42,7 +41,7 @@
   "prettier": "@excalidraw/prettier-config",
   "scripts": {
     "build-node": "node ./scripts/build-node.js",
-    "build:app:docker": "cross-env VITE_APP_DISABLE_SENTRY=true vite build",
+    "build:app:docker": "vite build",
     "build:app": "cross-env VITE_APP_GIT_SHA=$VERCEL_GIT_COMMIT_SHA cross-env VITE_APP_ENABLE_TRACKING=true vite build",
     "build:version": "node ../scripts/build-version.js",
     "build": "yarn build:app && yarn build:version",

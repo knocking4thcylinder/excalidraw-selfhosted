@@ -40,7 +40,7 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
 (full history preserved, incl. the Firestore-load fix `891781cd`); its old
 remote is frozen. Upstream pulls: `git subtree pull --prefix=app
 https://github.com/excalidraw/excalidraw.git <tag> --squash`. No bundles:
-the Deck updates via `git pull` inside `deck-redeploy-fork.sh` (needs one
+the Deck updates with `git pull` before `deploy.sh` (needs one
 read credential for this private repo; otherwise sync files from the Mac).
 
 1. **Packaging** (repo root):
@@ -138,7 +138,7 @@ read credential for this private repo; otherwise sync files from the Mac).
 | On | Command |
 |---|---|
 | Deck (first ever run) | `sudo steamos-readonly disable` then `bash ~/excalidraw/install.sh` |
-| Deck (after fork/image change) | `bash ~/excalidraw/redeploy-fork.sh` |
+| Deck (after fork/image change) | `bash ~/excalidraw/deploy.sh` |
 | Post-OS-update wipe on Deck | `bash ~/excalidraw/reinstall.sh` (just calls install.sh) |
 | Mac network fixes | `sudo bash ~/src/excalidraw-deck/mac/install-mac.sh` |
 | Android APK build + install | `cd android && ./build.sh && adb install -r build/Excalidraw.apk` |

@@ -189,13 +189,11 @@ locally but the tablet cannot connect, check the HTTPS proxy with `status`;
 starts after reboot. It also renews the TLS certificate when it has less than
 seven days remaining, and installs a daily certificate-renewal timer.
 
-Legacy `deck-redeploy-fork.sh`, `redeploy-fork.sh`, and `run-https.sh` commands
-now forward to the same deployment helper instead of maintaining separate,
-outdated container configurations. `./deploy.sh build` builds only the app image.
+`./deploy.sh build` builds only the app image.
 
-A synced directory without `.git` does **not** download GitHub updates: deploying
-builds its local files and prints a warning. Use a real checkout of
-`knocking4thcylinder/excalidraw-selfhosted` for automatic `git pull` updates.
+Deploying builds the local files as they are; it does not download GitHub
+updates. Run `git pull` in a checkout of
+`knocking4thcylinder/excalidraw-selfhosted` first to pick them up.
 Deployment preserves `shortcode-data/` and prevents concurrent deployments.
 
 ### Room folders

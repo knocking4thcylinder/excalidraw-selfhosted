@@ -1299,7 +1299,6 @@ describe("sharing the current drawing", () => {
             } as unknown as CollabAPI
           }
           excalidrawAPI={{ updateScene } as unknown as ExcalidrawImperativeAPI}
-          onExportToBackend={vi.fn()}
         />
       </Provider>,
     );
@@ -1329,7 +1328,6 @@ describe("sharing the current drawing", () => {
             } as unknown as CollabAPI
           }
           excalidrawAPI={{ updateScene } as unknown as ExcalidrawImperativeAPI}
-          onExportToBackend={vi.fn()}
         />
       </Provider>,
     );

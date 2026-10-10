@@ -10,27 +10,11 @@ export const ROOMS_HASH = "#rooms";
 
 export const isRoomsHash = (hash: string) => hash === ROOMS_HASH;
 
-// Where to go back to when the page closes. Captured on open so Back/close
-// restores the exact previous location (canvas or a room).
-let returnHash: string | null = null;
-
-export const openRoomsPage = (ownerWindow: Window) => {
-  if (!isRoomsHash(ownerWindow.location.hash)) {
-    returnHash = ownerWindow.location.hash;
-  }
-  if (!isRoomsHash(ownerWindow.location.hash)) {
-    ownerWindow.location.hash = ROOMS_HASH;
-  }
-};
-
+// The route only opens the sidebar (bookmarks, shortcuts); closing it drops
+// the hash. Callers that already navigated elsewhere are left alone.
 export const closeRoomsPage = (ownerWindow: Window) => {
-  const fallback = returnHash;
-  returnHash = null;
-  // Only navigate when the page is still showing: callers that already moved
-  // elsewhere (open/switch/create room) just drop the saved return hash.
   if (isRoomsHash(ownerWindow.location.hash)) {
-    ownerWindow.location.hash =
-      fallback && !isRoomsHash(fallback) ? fallback : "";
+    ownerWindow.location.hash = "";
   }
 };
 

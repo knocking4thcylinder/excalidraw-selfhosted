@@ -26,7 +26,6 @@ import { QRCode } from "./QRCode";
 
 import type { CollabAPI } from "../collab/Collab";
 
-type OnExportToBackend = () => void;
 type ShareDialogType = "share" | "collaborationOnly";
 
 export const shareDialogStateAtom = atom<
@@ -51,7 +50,6 @@ export type ShareDialogProps = {
   collabAPI: CollabAPI | null;
   excalidrawAPI: ExcalidrawImperativeAPI | null;
   handleClose: () => void;
-  onExportToBackend: OnExportToBackend;
   type: ShareDialogType;
 };
 
@@ -287,7 +285,6 @@ const ShareDialogInner = (props: ShareDialogProps) => {
 export const ShareDialog = (props: {
   collabAPI: CollabAPI | null;
   excalidrawAPI: ExcalidrawImperativeAPI | null;
-  onExportToBackend: OnExportToBackend;
 }) => {
   const [shareDialogState, setShareDialogState] = useAtom(shareDialogStateAtom);
 
@@ -308,7 +305,6 @@ export const ShareDialog = (props: {
       handleClose={() => setShareDialogState({ isOpen: false })}
       collabAPI={props.collabAPI}
       excalidrawAPI={props.excalidrawAPI}
-      onExportToBackend={props.onExportToBackend}
       type={shareDialogState.type}
     />
   );

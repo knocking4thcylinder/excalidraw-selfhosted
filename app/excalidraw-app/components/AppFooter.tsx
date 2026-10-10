@@ -4,7 +4,6 @@ import { FilledButton } from "@excalidraw/excalidraw/components/FilledButton";
 import { usersIcon } from "@excalidraw/excalidraw/components/icons";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 
-import { isExcalidrawPlusSignedUser } from "../app_constants";
 import { useAtomValue } from "../app-jotai";
 import {
   isOfflineAtom,
@@ -54,7 +53,7 @@ export const AppFooter = React.memo(
               onClick={onRoomsOpen}
             />
           )}
-          {!isExcalidrawPlusSignedUser && <EncryptedIcon />}
+          <EncryptedIcon />
         </div>
       </Footer>
     );
