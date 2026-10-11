@@ -92,6 +92,17 @@ function includesCommand(commands, ...prefix) {
   return commands.some((command) => prefix.every((value, index) => command[index] === value));
 }
 
+// File work on root-owned backend data runs as `podman run --entrypoint <cmd> <image> <args>`;
+// returns those inner commands as [cmd, ...args].
+function rootFileCommands(commands) {
+  return commands
+    .filter((command) => command[0] === "podman" && command[1] === "run" && command.includes("--entrypoint"))
+    .map((command) => {
+      const entrypoint = command.indexOf("--entrypoint");
+      return [command[entrypoint + 1], ...command.slice(entrypoint + 3)];
+    });
+}
+
 function imageBuilds(commands, image) {
   return commands.filter((command) => command[0] === "podman" && command[1] === "build" && command.includes(image)).length;
 }
@@ -337,7 +348,7 @@ test("successful backend deploys keep only the newest data backups", (context) =
   }
   mkdirSync(path.join(setup.directory, "recovery/manual-snapshot"));
   assert.equal(setup.run(["backend", "--local"], { BACKEND_BACKUPS_KEPT: "2" }).status, 0);
-  const removed = setup.commands().filter((command) => command[0] === "rm" && command[1] === "-rf").map((command) => path.basename(command.at(-1)));
+  const removed = rootFileCommands(setup.commands()).filter((command) => command[0] === "rm" && command[1] === "-rf").map((command) => path.basename(command.at(-1)));
   assert.deepEqual(removed.sort(), ["backend-20200100-000000-1", "backend-20200101-000000-1", "backend-20200102-000000-1"]);
 });
 
@@ -349,7 +360,7 @@ test("Elixir backend builds before stopping and backs up data", (context) => {
   const buildIndex = commands.findIndex((command) => command[0] === "podman" && command[1] === "build");
   const stopIndex = commands.findIndex((command) => command[0] === "systemctl" && command[1] === "stop");
   assert.ok(buildIndex >= 0 && buildIndex < stopIndex);
-  assert.ok(includesCommand(commands, "cp", "-a", path.join(setup.directory, "shortcode-data")));
+  assert.ok(includesCommand(rootFileCommands(commands), "cp", "-a", path.join(setup.directory, "shortcode-data")));
   const created = commands.find((command) => command[0] === "podman" && command[1] === "create");
   assert.ok(created.includes("excalidraw-api-elixir"));
   assert.ok(created.includes("LEGACY_DATA_DIR=/data"));
@@ -394,5 +405,14 @@ test("failed Elixir health check restores the previous backend container", (cont
   assert.equal(renames[0][2], "excalidraw-shortcode");
   assert.equal(renames[1][2], renames[0][3]);
   assert.equal(renames[1][3], "excalidraw-shortcode");
-  assert.ok(includesCommand(setup.commands(), "mv", path.join(setup.directory, "shortcode-data/whiteboard.sqlite3")));
+  assert.ok(includesCommand(rootFileCommands(setup.commands()), "mv", path.join(setup.directory, "shortcode-data/whiteboard.sqlite3")));
+});
+
+test("deploy scripts only use the commands the Deck allows through passwordless sudo", () => {
+  for (const script of ["deploy.sh", "redeploy.sh"]) {
+    const source = readFileSync(path.join(__dirname, script), "utf8");
+    const commands = [...source.matchAll(/^[^#\n]*\bsudo\s+(\S+)/gm)].map((match) => match[1]);
+    assert.ok(commands.length > 0);
+    assert.deepEqual(commands.filter((command) => !["podman", "systemctl", "tee"].includes(command)), [], script);
+  }
 });

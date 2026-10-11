@@ -63,6 +63,15 @@ if [ "$MODE" != app ]; then
   sudo podman build --layers -t "$BACKEND_IMAGE" "$BASE/backend"
 fi
 
+# The Deck grants passwordless sudo for podman, systemctl and tee only; any
+# other sudo command blocks on a password prompt. Backend data is root-owned,
+# so file work on it runs as root in a throwaway backend container instead.
+root_files() {
+  local command=$1
+  shift
+  sudo podman run --rm --network none -v "$BASE:$BASE" --entrypoint "$command" "$BACKEND_IMAGE" "$@"
+}
+
 PREVIOUS_BACKEND=
 PREVIOUS_APP=
 NEW_BACKEND_DATABASE=false
@@ -80,7 +89,7 @@ restore_services() {
       for suffix in '' -wal -shm; do
         database="$BASE/shortcode-data/whiteboard.sqlite3$suffix"
         if [ -e "$database" ]; then
-          sudo mv "$database" "$BACKUP/failed-whiteboard.sqlite3$suffix" || true
+          root_files mv "$database" "$BACKUP/failed-whiteboard.sqlite3$suffix" || true
         fi
       done
     fi
@@ -96,7 +105,7 @@ if [ "$MODE" != app ]; then
   BACKUP="$BASE/recovery/backend-$(date +%Y%m%d-%H%M%S)-$$"
   mkdir -p "$BACKUP"
   chmod 700 "$BACKUP"
-  sudo cp -a "$BASE/shortcode-data" "$BACKUP/data"
+  root_files cp -a "$BASE/shortcode-data" "$BACKUP/data"
   echo "Backend data backup: $BACKUP/data"
   if [ ! -e "$BASE/shortcode-data/whiteboard.sqlite3" ]; then NEW_BACKEND_DATABASE=true; fi
   previous_name="excalidraw-shortcode-previous-$$"
@@ -142,7 +151,7 @@ if [ -n "$PREVIOUS_APP" ]; then sudo podman rm -f "$PREVIOUS_APP" || true; fi
 # Keep the newest backend data backups only; each one is a full database copy.
 if [ "$MODE" != app ] && [ -d "$BASE/recovery" ]; then
   find "$BASE/recovery" -maxdepth 1 -name 'backend-*' -type d -print | sort | head -n -"${BACKEND_BACKUPS_KEPT:-10}" |
-    while IFS= read -r old_backup; do sudo rm -rf -- "$old_backup"; done
+    while IFS= read -r old_backup; do root_files rm -rf -- "$old_backup"; done
 fi
 printf 'TIMING: HTTPS checks: %ss\n' "$((SECONDS - STAGE_STARTED))"
 printf 'TIMING: total %s deploy: %ss\n' "$MODE" "$((SECONDS - STARTED))"
