@@ -67,9 +67,10 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
   `/home/containers/storage` and frees the old `/var/lib/containers` store
 - **`crypto.subtle` needs a secure origin** — plain-IP `http://` silently breaks
   "Start session" (no exception surfaces); hence HTTPS everywhere
-- **Excalidraw's collab URL is baked into the built JS bundle** — the installer
-  patches it to `wss://<fqdn>:8443` and verifies by grepping for _zero_ remaining
-  `oss-collab.excalidraw.com` references before starting nginx
+- **The collab socket uses the page's own origin** — production builds leave
+  `VITE_APP_WS_SERVER_URL` empty, Caddy routes `/socket.io/*` to the room
+  server, and the app image ships its own nginx config
+  (`app/excalidraw-app/nginx.conf`); nothing is patched at container start
 - **Offline app shell**: the source build enables Workbox/PWA precaching, with
   runtime caches for fonts, locales and lazy chunks. A browser must load/cache
   those resources before it can launch offline; room-data caching alone does
@@ -80,10 +81,12 @@ Wireless adb, if you want a cable-free tablet: plug USB once → `adb tcpip 5555
   "Resource busy" (temp-file rename); edit the host file and restart the container
 - **proxy/TUN apps on the Mac (Happ etc.)** hijack `100.64/10` and DNS — the
   per-peer `/32` route daemon + hosts entry neutralize both
-- Rooms are E2E-encrypted; the short-code map trades a bit of that
-  (it stores room keys server-side) for shorter links — delete
-  short codes from the SQLite database to revoke them: stop
-  `excalidraw-shortcode`, then run
+- **Rooms are not end-to-end encrypted against this server.** Scenes and
+  images are encrypted with the room key, but the API stores every room key
+  and `GET /api/rooms` lists them so any device can open any room; anyone who
+  can reach the API can read every room. The tailnet is the only access
+  control. Deleting a room also deletes its short codes and images; to revoke
+  all short codes, stop `excalidraw-shortcode`, then run
   `sqlite3 shortcode-data/whiteboard.sqlite3 "DELETE FROM records WHERE kind = 'codes'"`
 
 ## Repo layout (monorepo)

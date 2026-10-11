@@ -22,15 +22,17 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
 - **URL:** `https://steamdeck.example.ts.net:8443`
 - **Join a room:** full link *or* a short code like `7QU6-38SK` (server-side map,
   codes persisted in `~/excalidraw/shortcode-data/whiteboard.sqlite3` — the
-  database also keeps room keys, so E2E purity is traded for link brevity)
+  database also keeps room keys; so does the room registry, which lists them to
+  every client — the server can read every room)
 - **Live sync:** the forked Excalidraw connects to the room dialect on
   `wss://...:8443/socket.io/<roomID>` — one websocket per client; mirrored
   drawing happens over that (system-socket only, no autosave)
 - **My Rooms:** server-side room registry + encrypted scene snapshots in the
   API service (SQLite `~/excalidraw/shortcode-data/whiteboard.sqlite3`,
   new `/api/rooms*` endpoints). The fork auto-registers a room when it becomes
-  active and auto-saves encrypted snapshots (same cadence as the old firebase
-  path); the ShareDialog lists rooms across devices. Note: rooms created
+  active and auto-saves encrypted snapshots; image files are stored per room
+  under `/api/rooms/<roomId>/files/<fileId>`; the Rooms page lists rooms across
+  devices. Note: rooms created
   before this feature appear in the list once anyone joins them again.
 
 ## The repo (monorepo, private: github.com/knocking4thcylinder/excalidraw-selfhosted, branch `master`)
@@ -52,9 +54,9 @@ read credential for this private repo; otherwise sync files from the Mac).
      - Caddyfile with `:8443` TLS and reverse-proxy routing: `/s/*`,
        `/api/code*`, `/api/resolve*`, `/api/rooms*` → shortcode svc;
        `/socket.io/*` → room; `/` → app
-     - Runtime patch of the Excalidraw JS bundle: replaces
-       `https://oss-collab.excalidraw.com` with `wss://$FQDN:8443` and **verifies
-       zero remaining `oss-collab` references** before starting nginx (tripwire)
+     - The app image is used as built: it carries its nginx config
+       (`app/excalidraw-app/nginx.conf`, port 3000) and connects the collab
+       socket to its own origin
      - systemd units (`excalidraw.service`, `excalidraw-room.service`,
        `excalidraw-caddy.service`, `excalidraw-shortcode.service`) with
        `Restart=always`, `WantedBy=multi-user.target`
@@ -106,18 +108,13 @@ read credential for this private repo; otherwise sync files from the Mac).
      events), and the bundle is React-minified.
    - `packages/excalidraw/locales/en.json` and `ru-RU.json` — all new strings
      (button_joinSession, joinLinkLabel, roomCode, error_invalidLink, etc.)
-   - **Workbox/PWA plugin disabled** (`vite.config.mts` + dropped the
-     `registerSW` import in `index.tsx`): redeploys now reach clients as plain
-     network loads, no service-worker interception, no stale-cache dance.
-     Trade-off: no offline cached app shell.
-   - **Firebase saves disabled** (`data/firebase.ts`, opt-in
-     `VITE_APP_ENABLE_FIREBASE_SAVE=true` to re-enable): the OSS build's
-     auto-snapshot of collab rooms into Excalidraw's public Firestore hit the
-     1 MB doc limit on big boards and reported bogus "file too large" errors;
-     now the room socket is the only store, devices keep local copies in
-     browser storage.
-   - No other functional changes; the app image (tagged `excalidraw-selfhost`)
-     builds via `sudo podman build -t excalidraw-selfhost .` from this source.
+   - **Workbox/PWA enabled** for an offline app shell (`vite.config.mts`,
+     `registerSW()` in `index.tsx`); nginx serves `index.html` as `no-store`
+     and revalidates the service worker so redeploys reach clients.
+   - **Firebase removed**: scenes and images persist only in the self-hosted
+     API (SQLite); devices keep local copies in browser storage.
+   - The app image (tagged `excalidraw-selfhost`) builds via
+     `sudo podman build -t excalidraw-selfhost .` from this source.
 
 ## The machines (as of last verification, all contiguous)
 
@@ -145,17 +142,13 @@ read credential for this private repo; otherwise sync files from the Mac).
 
 ## Known trade-offs / gotchas worth inches if extending
 
-- **Server-side scene persistence is one encrypted snapshot per room** (the My
-  Rooms feature above) — not full history, and only for rooms registered after
-  the feature shipped. The live socket is still the realtime store. (Before
+- **Server-side scene persistence is one current snapshot per room plus the
+  last 10 versions** (the My Rooms feature above), only for rooms registered
+  after the feature shipped. The live socket is still the realtime store. (Before
   this: a room's scene existed only in the socket and each client's browser
   storage; reload == lose room if no one kept it open.)
 - **Firestore size ceiling was the cause of "file too large" on big boards** —
-  now gone (see fork commit `5eff2067`).
-- **Service worker was REMOVED from the fork** (commit "disable Workbox"), so
-  after every image rebuild all clients pick up fresh bundles on next load —
-  the `chrome://serviceworker-internals` + hard reload dance is only needed
-  once more now (transitioning away from the SW), never again.
+  Firebase is gone entirely now.
 - **`crypto.subtle` needs a Secure Context**: `http://<ip>` or self-signed URL
   makes collab silently fail ("Start session" no-op). This is why Tailscale
   cert + the hostname (not IP) is pinned in all places.
@@ -174,8 +167,8 @@ value order:
 
 1. ~~**Persistent scene storage on the Deck**~~ — **DONE** as the My Rooms
    feature (see "What exists"): the short-code service gained `/api/rooms*`
-   endpoints storing one encrypted snapshot per room (`scenes.json`), the fork
-   auto-saves at the old firebase cadence; no new container was needed.
+   endpoints storing encrypted snapshots per room (now in SQLite); no new
+   container was needed.
 2. **Client-side "Save to file" flows in the APK** — already partially done
    via blob-hook; could add an "Export PNG straight to Downloads" button using
    the same bridge (`AndroidBlobSaver.saveFile`).
