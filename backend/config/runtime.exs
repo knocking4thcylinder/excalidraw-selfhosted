@@ -6,13 +6,15 @@ if config_env() != :test do
   config :whiteboard, :legacy_data_dir, System.get_env("LEGACY_DATA_DIR")
   config :whiteboard, :scene_sync_enabled, System.get_env("SCENE_SYNC_ENABLED", "false") == "true"
 
-  config :whiteboard, Whiteboard.Endpoint,
-    http: [
-      ip:
-        System.get_env("BIND_ADDRESS", "127.0.0.1")
-        |> String.to_charlist()
-        |> :inet.parse_address()
-        |> elem(1),
-      port: String.to_integer(System.get_env("PORT", "3003"))
-    ]
+  bind_address = System.get_env("BIND_ADDRESS", "127.0.0.1")
+
+  ip =
+    case :inet.parse_address(String.to_charlist(bind_address)) do
+      {:ok, ip} -> ip
+      {:error, _} -> raise "BIND_ADDRESS is not an IP address: #{inspect(bind_address)}"
+    end
+
+  config :whiteboard, :http,
+    ip: ip,
+    port: String.to_integer(System.get_env("PORT", "3003"))
 end

@@ -1,6 +1,6 @@
 # Elixir persistence API
 
-Phoenix HTTP endpoint + Ecto/SQLite API for rooms, folders, short codes,
+Plug router on Bandit + Ecto/SQLite API for rooms, folders, short codes,
 encrypted scene snapshots and encrypted room images. It replaced the original Node `shortcode/server.js`,
 which has been removed. The React frontend and Socket.IO collaboration service
 are separate.

@@ -9,13 +9,11 @@ config :whiteboard, Whiteboard.Repo,
   journal_mode: :wal,
   busy_timeout: 5_000
 
-config :whiteboard, Whiteboard.Endpoint,
-  adapter: Bandit.PhoenixAdapter,
-  http: [ip: {127, 0, 0, 1}, port: 3003],
-  server: config_env() != :test,
-  secret_key_base: String.duplicate("local-api-no-session-", 4)
+config :whiteboard, :http,
+  ip: {127, 0, 0, 1},
+  port: 3003,
+  server: config_env() != :test
 
-config :phoenix, :json_library, Jason
 config :logger, level: :info
 config :logger, :console, format: "$time $level $message\n"
 

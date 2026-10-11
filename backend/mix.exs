@@ -11,7 +11,7 @@ defmodule Whiteboard.MixProject do
 
   defp deps do
     [
-      {:phoenix, "~> 1.7.21"},
+      {:plug, "~> 1.16"},
       {:bandit, "~> 1.6"},
       {:ecto_sql, "~> 3.14"},
       {:ecto_sqlite3, "~> 0.25.0"},

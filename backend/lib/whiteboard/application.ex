@@ -5,12 +5,19 @@ defmodule Whiteboard.Application do
     database = Application.fetch_env!(:whiteboard, Whiteboard.Repo)[:database]
     File.mkdir_p!(Path.dirname(database))
 
-    children = [
-      Whiteboard.Repo,
-      {Ecto.Migrator, repos: [Whiteboard.Repo]},
-      Whiteboard.Bootstrap,
-      Whiteboard.Endpoint
-    ]
+    http = Application.fetch_env!(:whiteboard, :http)
+
+    server =
+      if http[:server],
+        do: [{Bandit, plug: Whiteboard.Router, ip: http[:ip], port: http[:port]}],
+        else: []
+
+    children =
+      [
+        Whiteboard.Repo,
+        {Ecto.Migrator, repos: [Whiteboard.Repo]},
+        Whiteboard.Bootstrap
+      ] ++ server
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Whiteboard.Supervisor)
   end
