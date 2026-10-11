@@ -6,10 +6,16 @@ import {
   waitFor,
 } from "@excalidraw/excalidraw/tests/test-utils";
 import { vi } from "vitest";
+import { clear, createStore } from "idb-keyval";
 
 import ExcalidrawApp from "../App";
 import { appJotaiStore } from "../app-jotai";
 import { offlineRoomPendingAtom } from "../collab/Collab";
+import {
+  clearRoomMemoryCache,
+  flushRoomCache,
+  readRoomDraft,
+} from "../data/roomCache";
 
 const { h } = window;
 
@@ -73,6 +79,21 @@ vi.mock("../data/rooms", async (importOriginal) => {
 const ROOM_ID = "offlinetestroom01";
 const ROOM_KEY = "AaBbCcDdEeFfGgHhIiJjKk";
 
+// Offline work persists as the room's draft, never as the personal canvas.
+const expectSeedInRoomDraft = () =>
+  waitFor(
+    async () => {
+      const draft = await readRoomDraft(ROOM_ID, ROOM_KEY);
+      expect(draft?.map((element) => element.id)).toContain(
+        "offline-seed-rect",
+      );
+      expect(localStorage.getItem("excalidraw") || "").not.toContain(
+        "offline-seed-rect",
+      );
+    },
+    { timeout: 5000 },
+  );
+
 const seedRect = {
   id: "offline-seed-rect",
   type: "rectangle",
@@ -102,6 +123,12 @@ const seedRect = {
 };
 
 describe("offline-first rooms", () => {
+  beforeEach(async () => {
+    await flushRoomCache();
+    clearRoomMemoryCache();
+    await clear(createStore("excalidraw-rooms-db", "cache"));
+  });
+
   it("offline boot preserves canvas, flags pending, merges on reconnect", async () => {
     window.location.hash = `#room=${ROOM_ID},${ROOM_KEY}`;
 
@@ -125,7 +152,7 @@ describe("offline-first rooms", () => {
     );
 
     // Draw offline: direct scene update (as the canvas would from strokes),
-    // then confirm it reached local persistence.
+    // then confirm it reached the room draft.
     const { CaptureUpdateAction: CUA } = await import("@excalidraw/excalidraw");
     await act(async () => {
       API.updateScene({
@@ -133,11 +160,7 @@ describe("offline-first rooms", () => {
         captureUpdate: CUA.NEVER,
       } as any);
     });
-    await waitFor(() => {
-      expect(localStorage.getItem("excalidraw") || "").toContain(
-        "offline-seed-rect",
-      );
-    });
+    await expectSeedInRoomDraft();
 
     // Reconnect: socket alive + server snapshot with one element appears.
     socketHolder.socket.connected = true;
@@ -219,12 +242,8 @@ describe("offline-first rooms", () => {
       roomId: ROOM_ID,
       roomKey: ROOM_KEY,
     });
-    // offline work reaches local persistence
-    await waitFor(() => {
-      expect(localStorage.getItem("excalidraw") || "").toContain(
-        "offline-seed-rect",
-      );
-    });
+    // offline work reaches the room draft
+    await expectSeedInRoomDraft();
 
     localStorage.clear();
   }, 120000);

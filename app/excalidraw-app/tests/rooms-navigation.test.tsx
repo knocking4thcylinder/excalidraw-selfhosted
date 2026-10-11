@@ -40,7 +40,8 @@ import {
 import { getSyncableElements } from "../data";
 import { LocalData } from "../data/LocalData";
 import { appJotaiStore } from "../app-jotai";
-import { WS_SUBTYPES } from "../app_constants";
+import { STORAGE_KEYS, WS_SUBTYPES } from "../app_constants";
+import { loadLocalScene } from "../data/sceneStorage";
 import { roomFoldersAtom, roomsRegistryAtom } from "../rooms/explorerState";
 import {
   activeRoomLinkAtom,
@@ -991,6 +992,48 @@ describe("Explorer room navigation", () => {
       ).toBe(true),
     );
     expect(window.h.state.zoom.value).toBeGreaterThan(0.1);
+  });
+
+  it("never writes room drawings over the personal local canvas", async () => {
+    const personal = API.createElement({
+      type: "rectangle",
+      id: "personal-drawing",
+      width: 40,
+      height: 40,
+    });
+    localStorage.setItem(
+      STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS,
+      JSON.stringify([personal]),
+    );
+    await render(<ExcalidrawApp />);
+    await waitFor(() =>
+      expect(window.h.elements.map((element) => element.id)).toEqual([
+        "personal-drawing",
+      ]),
+    );
+    await openRoom("Algebra");
+    await waitFor(() =>
+      expect(window.h.elements.map((element) => element.id)).toEqual([
+        "room-a-drawing",
+      ]),
+    );
+    await act(async () => {
+      API.updateScene({
+        elements: [
+          ...window.h.elements,
+          API.createElement({ type: "rectangle", id: "room-edit" }),
+        ],
+      });
+    });
+    await act(async () => {
+      LocalData.flushSave();
+    });
+    const stored = JSON.parse(
+      (await loadLocalScene(localStorage)).elements ?? "[]",
+    );
+    expect(stored.map((element: { id: string }) => element.id)).toEqual([
+      "personal-drawing",
+    ]);
   });
 
   it("deletes the current room, disconnects it, and keeps its drawing locally", async () => {

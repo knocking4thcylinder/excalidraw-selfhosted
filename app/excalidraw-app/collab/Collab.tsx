@@ -879,9 +879,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     };
 
     this.setIsCollaborating(true);
-    // Pause local persistence BEFORE any await: a room boot must never
-    // persist its (still empty) canvas over local work, and offline work
-    // must survive from the first millisecond.
+    // Room canvases never go to the personal local scene: local persistence
+    // stays paused for the whole session (destroySocketClient resumes it).
+    // Room work is persisted as the per-room draft instead (syncElements).
     LocalData.pauseSave("collaboration");
 
     const generation = ++this.roomStartGeneration;
@@ -998,7 +998,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       appState: viewport,
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-    LocalData.resumeSave("collaboration");
     scenePromise.resolve({
       elements: restored,
       appState: viewport,
@@ -1216,9 +1215,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       });
 
       this.saveCollabRoom(getSyncableElements(elements));
-      // A freshly created room owns its canvas seed: local saves resume at
-      // once so the seed itself is crash-safe from the first second.
-      LocalData.resumeSave("collaboration");
     }
 
     // fallback in case you're not alone in the room but still don't receive
@@ -1536,7 +1532,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
             elements: preview,
             captureUpdate: CaptureUpdateAction.NEVER,
           });
-          LocalData.resumeSave("collaboration");
           this.loadImageFiles();
           onCachedScene?.({ elements: preview, scrollToContent: true });
         }
@@ -1621,10 +1616,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         if (recoveredChanges) {
           this.portal.broadcastScene(WS_SUBTYPES.UPDATE, merged, true);
         }
-        // Online and healthy: local saves resume so every later edit is
-        // crash-safe (the boot pause only guarded the empty-canvas window).
-        LocalData.resumeSave("collaboration");
-
         return {
           elements: merged,
           scrollToContent: true,
@@ -1634,7 +1625,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // Load failed. If the socket never connected, the server is
       // unreachable: enter offline mode instead of resolving to an empty
       // canvas that would reads as "room is empty". Local work keeps
-      // accumulating in the canvas (persisted via resumed local save) and
+      // accumulating in the canvas (persisted as the room draft) and
       // merges on recovery. A crash backup for the same room paints
       // immediately so a crash + offline boot still restores.
       if (this.cachedRoomBaseline) {
@@ -1672,7 +1663,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           elements: restored,
           captureUpdate: CaptureUpdateAction.IMMEDIATELY,
         });
-        LocalData.resumeSave("collaboration");
         return {
           elements: restored,
           scrollToContent: true,
@@ -1682,7 +1672,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // unless an offline recovery is still pending, in which case the canvas
       // may hold strokes the throttled backup hasn't flushed yet. Never wipe
       // those: keep them and push to the server instead.
-      LocalData.resumeSave("collaboration");
       if (this.offlineRecoveryPending) {
         this.clearOfflinePending();
         this.queueSaveRoom();
@@ -1706,7 +1695,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.offlineRecoveryPending = true;
     appJotaiStore.set(roomValidationPendingAtom, false);
     appJotaiStore.set(offlineRoomPendingAtom, { ...roomLinkData });
-    LocalData.resumeSave("collaboration");
   }
 
   private clearOfflinePending() {
