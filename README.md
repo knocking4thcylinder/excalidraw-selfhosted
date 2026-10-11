@@ -40,20 +40,26 @@ Draw with a stylus on an Android tablet and watch it appear live on a laptop. Ev
 ## How it works
 
 ```mermaid
-%%{init:{"theme":"dark"}}%%
-graph LR
-  T["Android tablet<br/>WebView wrapper + stylus"] -- "HTTPS / WSS" --> C
-  M["MacBook<br/>route fixer + hosts entry"] -- "HTTPS / WSS" --> C
-  B["Any browser<br/>on the tailnet"] -- "HTTPS / WSS" --> C
-  subgraph Deck ["Steam Deck · Podman + systemd"]
-    C["Caddy :8443<br/>Tailscale TLS cert"]
-    A["App :3000<br/>Excalidraw fork, nginx"]
-    R["Room :3002<br/>Socket.IO relay"]
-    S["API :3003<br/>Elixir + SQLite"]
+flowchart LR
+  tablet["Android tablet"]
+  mac["MacBook"]
+  browser["Any browser"]
+
+  subgraph deck ["Steam Deck"]
+    caddy["<b>Caddy</b> :8443<br/>Tailscale TLS cert"]
+    app["<b>App</b> :3000<br/>Excalidraw + nginx"]
+    room["<b>Room</b> :3002<br/>Socket.IO relay"]
+    api["<b>API</b> :3003<br/>Elixir"]
+    db[("SQLite")]
+    caddy -- "/" --> app
+    caddy -- "/socket.io" --> room
+    caddy -- "/api" --> api
+    api --> db
   end
-  C -- "/" --> A
-  C -- "/socket.io/*" --> R
-  C -- "/api/*, /s/*" --> S
+
+  tablet --> caddy
+  mac -- "HTTPS + WSS<br/>over Tailscale" --> caddy
+  browser --> caddy
 ```
 
 | Component | What it does |
