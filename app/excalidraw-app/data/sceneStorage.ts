@@ -79,6 +79,9 @@ export const saveLocalScene = async (storage: Storage, scene: LocalScene) => {
   storage.removeItem(STORAGE_KEYS.LOCAL_STORAGE_APP_STATE);
 };
 
+// Legacy single-slot backup of the last-edited room, superseded by per-room
+// drafts (roomCache). Still read so a room last edited before drafts existed
+// keeps its unsynced work; nothing writes it any more.
 export const readRoomBackup = async (
   storage: Storage,
   roomId: string,
@@ -117,23 +120,4 @@ export const readRoomBackup = async (
   return stored?.roomId === roomId && Array.isArray(stored.elements)
     ? stored.elements
     : null;
-};
-
-export const saveRoomBackup = async (
-  storage: Storage,
-  roomId: string,
-  elements: readonly SyncableExcalidrawElement[],
-) => {
-  if (!elements.length) {
-    return;
-  }
-  const backup: RoomBackup = { roomId, elements, updatedAt: Date.now() };
-  try {
-    await set(ROOM_BACKUP_KEY, backup, sceneStore);
-  } catch (error) {
-    console.warn("IndexedDB room backup save failed", error);
-    storage.setItem(ROOM_BACKUP_KEY, JSON.stringify(backup));
-    return;
-  }
-  storage.removeItem(ROOM_BACKUP_KEY);
 };

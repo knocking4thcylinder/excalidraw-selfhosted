@@ -41,7 +41,7 @@ import { getSyncableElements } from "../data";
 import { LocalData } from "../data/LocalData";
 import { appJotaiStore } from "../app-jotai";
 import { STORAGE_KEYS, WS_SUBTYPES } from "../app_constants";
-import { loadLocalScene } from "../data/sceneStorage";
+import { loadLocalScene, readRoomBackup } from "../data/sceneStorage";
 import { roomFoldersAtom, roomsRegistryAtom } from "../rooms/explorerState";
 import {
   activeRoomLinkAtom,
@@ -62,8 +62,7 @@ vi.mock("../app_constants", async (importOriginal) => ({
 
 vi.mock("../data/sceneStorage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../data/sceneStorage")>()),
-  readRoomBackup: async () => null,
-  saveRoomBackup: async () => {},
+  readRoomBackup: vi.fn(async () => null),
 }));
 
 Object.defineProperty(window, "crypto", {
@@ -161,6 +160,7 @@ beforeEach(async () => {
     erroredFiles: new Map(),
   });
   vi.mocked(deleteRoom).mockResolvedValue(true);
+  vi.mocked(readRoomBackup).mockResolvedValue(null);
   appJotaiStore.set(activeRoomLinkAtom, null);
   appJotaiStore.set(isCollaboratingAtom, false);
   appJotaiStore.set(offlineRoomPendingAtom, null);
@@ -992,6 +992,37 @@ describe("Explorer room navigation", () => {
       ).toBe(true),
     );
     expect(window.h.state.zoom.value).toBeGreaterThan(0.1);
+  });
+
+  it("keeps unsynced edits to existing shapes from a legacy room backup", async () => {
+    vi.mocked(readRoomBackup).mockImplementation(async (_storage, roomId) =>
+      roomId === "room-a"
+        ? syncableScene([
+            {
+              ...API.createElement({
+                type: "rectangle",
+                id: "room-a-drawing",
+                x: 555,
+                width: 100,
+                height: 100,
+              }),
+              version: 9,
+            },
+          ])
+        : null,
+    );
+    await render(<ExcalidrawApp />);
+    await openRoom("Algebra");
+    await waitFor(() => expect(loadRoomFromServer).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(window.h.elements.map((element) => element.id)).toEqual([
+        "room-a-drawing",
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("status")).not.toBeInTheDocument(),
+    );
+    expect(window.h.elements[0].x).toBe(555);
   });
 
   it("never writes room drawings over the personal local canvas", async () => {

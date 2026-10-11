@@ -56,7 +56,7 @@ import type {
 import type { Mutable, ValueOf } from "@excalidraw/common/utility-types";
 
 import { appJotaiStore, atom } from "../app-jotai";
-import { readRoomBackup, saveRoomBackup } from "../data/sceneStorage";
+import { readRoomBackup } from "../data/sceneStorage";
 import {
   CURSOR_SYNC_TIMEOUT,
   FILE_UPLOAD_MAX_BYTES,
@@ -131,35 +131,27 @@ export const offlineRoomPendingAtom = atom<{
   roomKey: string;
 } | null>(null);
 
-// Crash-safety: single-slot per-device backup of the last-touched room,
-// written on every edit (throttled) and restored on boot when the room
-// matches. One slot bounds localStorage use; a crash always reloads the
-// same URL, so the last room is the one that matters.
-// Union by id, last-writer-wins per element (higher version wins, ties go
-// to the local backup which holds the unsynced crash/offline strokes).
-const mergeBackupWithServer = (
-  backup: readonly SyncableExcalidrawElement[],
-  server: readonly SyncableExcalidrawElement[],
-): SyncableExcalidrawElement[] => {
-  const byId = new Map<
-    string,
-    SyncableExcalidrawElement & { version: number }
-  >();
-  for (const el of server as (SyncableExcalidrawElement & {
-    version: number;
-  })[]) {
-    byId.set(el.id, el);
-  }
-  for (const el of backup as (SyncableExcalidrawElement & {
-    version: number;
-  })[]) {
-    const prev = byId.get(el.id);
-    if (!prev || (el.version ?? 0) >= (prev.version ?? 0)) {
-      byId.set(el.id, el);
-    }
-  }
-  return [...byId.values()];
-};
+// Unsynced room work: the per-room draft, or the legacy single-slot backup
+// for a room last edited before drafts existed.
+const readLocalRoomScene = async (
+  roomId: string,
+  roomKey: string,
+): Promise<readonly SyncableExcalidrawElement[] | null> =>
+  (await readRoomDraft(roomId, roomKey)) ??
+  (await readRoomBackup(localStorage, roomId));
+
+// Local work over a saved scene, element by element, with the same rules as
+// live collaboration: the higher version wins and ties break by versionNonce.
+const mergeLocalWork = (
+  local: readonly SyncableExcalidrawElement[],
+  saved: readonly SyncableExcalidrawElement[],
+  appState: AppState,
+) =>
+  reconcileElements(
+    restoreElements(local, null, { repairBindings: true }),
+    saved as unknown as readonly RemoteExcalidrawElement[],
+    appState,
+  );
 
 interface CollabState {
   errorMessage: string | null;
@@ -447,7 +439,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   };
 
-  private saveRoomBackupThrottled = throttle(
+  private saveRoomDraftThrottled = throttle(
     async (
       roomId: string,
       roomKey: string,
@@ -457,7 +449,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         return;
       }
       try {
-        const generation = this.roomStartGeneration;
         const savingDraft = saveRoomDraft(roomId, roomKey, elements);
         if (this.portal.roomId === roomId && this.portal.roomKey === roomKey) {
           await cacheRoomFiles(
@@ -467,11 +458,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           );
         }
         await savingDraft;
-        if (this.roomStartGeneration === generation) {
-          await saveRoomBackup(localStorage, roomId, elements);
-        }
       } catch (error) {
-        console.error("room backup save failed", error);
+        console.error("room draft save failed", error);
       }
     },
     1000,
@@ -539,8 +527,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   componentWillUnmount() {
-    this.saveRoomBackupThrottled.flush();
-    this.saveRoomBackupThrottled.cancel();
+    this.saveRoomDraftThrottled.flush();
+    this.saveRoomDraftThrottled.cancel();
     this.queueBroadcastAllElements.cancel();
     this.queueSaveRoom.cancel();
     this.loadImageFiles.cancel();
@@ -589,14 +577,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private onUnload = () => {
-    // Best-effort crash/kill persistence: flush the throttled local backup
-    // synchronously so the last strokes survive even if the 1s window
-    // hadn't fired yet. Server flush rides in beforeUnload + keepalive.
-    try {
-      (this.saveRoomBackupThrottled as { flush?: () => void }).flush?.();
-    } catch {
-      // ignore — backup is best-effort
-    }
+    // Best-effort crash/kill persistence: start the throttled draft write now
+    // so the last strokes have a chance to land even if the 1s window hadn't
+    // fired yet. Server flush rides in beforeUnload + keepalive.
+    this.saveRoomDraftThrottled.flush();
     LocalData.flushSave();
     this.destroySocketClient({ isUnload: true });
   };
@@ -683,13 +667,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   stopCollaboration = (keepRemoteState = true) => {
     // Leaving abandons any pending offline recovery for the old room.
     // Persist the old room's last strokes before tearing down, so a quick
-    // room switch doesn't drop them from the crash backup.
-    try {
-      (this.saveRoomBackupThrottled as { flush?: () => void }).flush?.();
-      this.saveRoomBackupThrottled.cancel();
-    } catch {
-      // ignore — backup is best-effort
-    }
+    // room switch doesn't drop them from its draft.
+    this.saveRoomDraftThrottled.flush();
+    this.saveRoomDraftThrottled.cancel();
     this.rememberPreparedRoom();
     this.queueBroadcastAllElements.cancel();
     this.queueSaveRoom.cancel();
@@ -950,25 +930,22 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     } else {
       viewport = prepared?.viewport;
       this.preparedRoomScenes.delete(cacheKey);
-      const [cached, draft] = await Promise.all([
+      const [cached, local] = await Promise.all([
         readCachedRoomScene(room.roomId, room.roomKey),
-        readRoomDraft(room.roomId, room.roomKey),
+        readLocalRoomScene(room.roomId, room.roomKey),
       ]);
-      const backup = draft
-        ? null
-        : await readRoomBackup(localStorage, room.roomId);
       if (
         this.roomStartGeneration !== generation ||
-        (!cached && !draft?.length)
+        (!cached && !local?.length)
       ) {
         return;
       }
       this.cachedRoomBaseline = cached?.elements ?? null;
       restored = reconcileElements(
-        restoreElements(
-          mergeBackupWithServer(draft ?? backup ?? [], cached?.elements ?? []),
-          null,
-          { repairBindings: true },
+        mergeLocalWork(
+          local ?? [],
+          cached?.elements ?? [],
+          this.excalidrawAPI.getAppState(),
         ),
         this.excalidrawAPI.getSceneElementsIncludingDeleted() as readonly RemoteExcalidrawElement[],
         this.excalidrawAPI.getAppState(),
@@ -1502,24 +1479,21 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         }
       }
       if (!cachedPreview && !wasInitialized && !this.offlineRecoveryPending) {
-        const [cached, draft, backup] = await Promise.all([
+        const [cached, local] = await Promise.all([
           readCachedRoomScene(roomLinkData.roomId, roomLinkData.roomKey),
-          readRoomDraft(roomLinkData.roomId, roomLinkData.roomKey),
-          readRoomBackup(localStorage, roomLinkData.roomId),
+          readLocalRoomScene(roomLinkData.roomId, roomLinkData.roomKey),
         ]);
         if (!isCurrentRoom() || this.portal.socketInitialized) {
           return null;
         }
-        if (cached || draft?.length) {
+        if (cached || local?.length) {
           this.cachedRoomBaseline = cached?.elements ?? null;
-          const localElements = draft ?? backup ?? [];
-          const restored = restoreElements(
-            mergeBackupWithServer(localElements, cached?.elements ?? []),
-            null,
-            { repairBindings: true },
-          );
           const preview = reconcileElements(
-            restored,
+            mergeLocalWork(
+              local ?? [],
+              cached?.elements ?? [],
+              this.excalidrawAPI.getAppState(),
+            ),
             this.excalidrawAPI.getSceneElementsIncludingDeleted() as readonly RemoteExcalidrawElement[],
             this.excalidrawAPI.getAppState(),
           );
@@ -1547,28 +1521,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       ) {
         return null;
       }
-      // Crash-safety: unsynced strokes from before a crash/offline stretch
-      // live in the room backup. Merge them over the server snapshot so a
-      // reload never drops work the server hasn't seen yet. Room-scoped, so
-      // nothing leaks across rooms.
-      const backup = await readRoomBackup(localStorage, roomLinkData.roomId);
-      if (
-        !isCurrentRoom() ||
-        (!wasInitialized && this.portal.socketInitialized)
-      ) {
-        return null;
-      }
+      // Unsynced local work (draft or legacy backup) is already on the canvas
+      // as the preview, with offlineRecoveryPending set; paintOfflineRecovery
+      // merges it over the server scene below.
       this.portal.socketInitialized = true;
       if (elements) {
-        let merged =
-          !this.cachedRoomBaseline &&
-          backup?.length &&
-          !this.elementsEqualIds(
-            backup,
-            elements as readonly SyncableExcalidrawElement[],
-          )
-            ? mergeBackupWithServer(backup, elements)
-            : (elements as readonly SyncableExcalidrawElement[]);
+        let merged = elements as readonly SyncableExcalidrawElement[];
         if (!wasInitialized && !this.offlineRecoveryPending) {
           merged = getSyncableElements(
             reconcileElements(
@@ -1624,53 +1582,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
       // Load failed. If the socket never connected, the server is
       // unreachable: enter offline mode instead of resolving to an empty
-      // canvas that would reads as "room is empty". Local work keeps
-      // accumulating in the canvas (persisted as the room draft) and
-      // merges on recovery. A crash backup for the same room paints
-      // immediately so a crash + offline boot still restores.
-      if (this.cachedRoomBaseline) {
+      // canvas that would read as "room is empty". Local work (already on
+      // the canvas as the preview) keeps accumulating, persisted as the room
+      // draft, and merges on recovery.
+      if (this.cachedRoomBaseline || !this.portal.socket.connected) {
         this.enterOfflineRoomMode(roomLinkData);
         return null;
       }
-      if (!this.portal.socket.connected) {
-        this.enterOfflineRoomMode(roomLinkData);
-        if (backup?.length) {
-          const restored = restoreElements(backup, null, {
-            repairBindings: true,
-          });
-          this.excalidrawAPI.updateScene({
-            elements: restored,
-            captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-          });
-          return {
-            elements: restored,
-            scrollToContent: true,
-          };
-        }
-        return null;
-      }
-      // Connected socket with no snapshot: empty/new room — but a crash
-      // backup for the SAME room still wins over blank (e.g. created offline,
-      // crashed before the first server save).
-      if (backup?.length) {
-        const restored = restoreElements(backup, null, {
-          repairBindings: true,
-        });
-        this.setLastBroadcastedOrReceivedSceneVersion(
-          getSceneVersion(restored),
-        );
-        this.excalidrawAPI.updateScene({
-          elements: restored,
-          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-        });
-        return {
-          elements: restored,
-          scrollToContent: true,
-        };
-      }
-      // Connected but no snapshot and no backup: a genuinely empty room —
-      // unless an offline recovery is still pending, in which case the canvas
-      // may hold strokes the throttled backup hasn't flushed yet. Never wipe
+      // Connected but no snapshot: a genuinely empty room — unless local
+      // work is pending (draft preview or offline strokes). Never wipe
       // those: keep them and push to the server instead.
       if (this.offlineRecoveryPending) {
         this.clearOfflinePending();
@@ -1736,27 +1656,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
   }
-
-  // Cheap identity check so we skip the backup merge when both sides
-  // already hold the same ids (the common healthy-join case).
-  private elementsEqualIds = (
-    a: readonly { id: string }[],
-    b: readonly { id: string }[],
-  ): boolean => {
-    if (a.length !== b.length) {
-      return false;
-    }
-    const ids = new Set(a.map((el) => el.id));
-    if (ids.size !== a.length) {
-      return false;
-    }
-    for (const el of b) {
-      if (!ids.has(el.id)) {
-        return false;
-      }
-    }
-    return true;
-  };
 
   private _reconcileElements = (
     remoteElements: readonly RemoteExcalidrawElement[],
@@ -1994,11 +1893,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   syncElements = (elements: readonly OrderedExcalidrawElement[]) => {
     this.broadcastElements(elements);
     this.queueSaveRoom();
-    // Crash-safety: persist every edit locally, even while collaborating.
-    // The roomId is stable for the session; the backup restores after a
-    // crash even if the server snapshot lags behind.
+    // Crash-safety: persist every edit as the room draft. It restores after
+    // a crash or offline stretch even if the server snapshot lags behind.
     if (this.portal.roomId && this.portal.roomKey) {
-      this.saveRoomBackupThrottled(
+      this.saveRoomDraftThrottled(
         this.portal.roomId,
         this.portal.roomKey,
         getSyncableElements(elements),

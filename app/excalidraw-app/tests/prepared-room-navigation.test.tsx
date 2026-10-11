@@ -60,7 +60,6 @@ vi.mock("../app_constants", async (importOriginal) => ({
 vi.mock("../data/sceneStorage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../data/sceneStorage")>()),
   readRoomBackup: async () => null,
-  saveRoomBackup: async () => {},
 }));
 
 vi.mock("../data/roomFiles", async (importOriginal) => ({

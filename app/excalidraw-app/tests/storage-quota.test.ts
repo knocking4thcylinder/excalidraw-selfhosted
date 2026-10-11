@@ -6,7 +6,6 @@ import {
   loadLocalScene,
   readRoomBackup,
   saveLocalScene,
-  saveRoomBackup,
 } from "../data/sceneStorage";
 
 import type { SyncableExcalidrawElement } from "../data";
@@ -103,7 +102,7 @@ describe("scene storage quota recovery", () => {
   });
 });
 
-describe("room backup storage", () => {
+describe("legacy room backup", () => {
   const elements = [
     { id: "offline-stroke", version: 3 },
   ] as unknown as readonly SyncableExcalidrawElement[];
@@ -125,13 +124,5 @@ describe("room backup storage", () => {
     });
     expect(await readRoomBackup(localStorage, "room-a")).toEqual(elements);
     expect(localStorage.getItem("excalidraw-room-backup")).toBe(raw);
-  });
-
-  it("stores backups without consuming the localStorage quota", async () => {
-    await saveRoomBackup(localStorage, "room-a", elements);
-    expect(await readRoomBackup(localStorage, "room-a")).toEqual(elements);
-    expect(localStorage.getItem("excalidraw-room-backup")).toBeNull();
-    await saveRoomBackup(localStorage, "room-a", []);
-    expect(await readRoomBackup(localStorage, "room-a")).toEqual(elements);
   });
 });
