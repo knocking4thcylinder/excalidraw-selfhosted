@@ -29,17 +29,22 @@ defmodule Whiteboard.Router do
             {name, value}, conn -> put_resp_header(conn, name, value)
           end)
 
-        encoded = if is_nil(body), do: "", else: Jason.encode!(body)
+        {content_type, charset, encoded} =
+          case body do
+            nil -> {"application/json", "utf-8", ""}
+            {:binary, data} -> {"application/octet-stream", nil, data}
+            body -> {"application/json", "utf-8", Jason.encode!(body)}
+          end
 
         conn
-        |> put_resp_content_type("application/json")
+        |> put_resp_content_type(content_type, charset)
         |> put_resp_header("content-length", Integer.to_string(byte_size(encoded)))
         |> send_resp(status, if(conn.method == "HEAD", do: "", else: encoded))
 
       {:error, status, conn} ->
         conn
         |> put_resp_content_type("application/json")
-        |> send_resp(status, Jason.encode!(%{error: "invalid or oversized JSON body"}))
+        |> send_resp(status, Jason.encode!(%{error: "invalid or oversized request body"}))
     end
   end
 
@@ -47,7 +52,30 @@ defmodule Whiteboard.Router do
     read_payload(conn, "", 0)
   end
 
+  defp read_payload(conn) when conn.method == "PUT" do
+    case read_raw(conn, "") do
+      {:ok, body, conn} -> {:ok, {:binary, body}, conn}
+      error -> error
+    end
+  end
+
   defp read_payload(conn), do: {:ok, %{}, conn}
+
+  defp read_raw(conn, body) do
+    case read_body(conn, length: 5 * 1024 * 1024, read_length: 64 * 1024) do
+      {state, chunk, conn} when state in [:ok, :more] ->
+        body = body <> chunk
+
+        cond do
+          byte_size(body) > 5 * 1024 * 1024 -> {:error, 413, conn}
+          state == :more -> read_raw(conn, body)
+          true -> {:ok, body, conn}
+        end
+
+      {:error, _reason} ->
+        {:error, 400, conn}
+    end
+  end
 
   defp read_payload(conn, body, size) do
     case read_body(conn, length: 5 * 1024 * 1024, read_length: 64 * 1024) do

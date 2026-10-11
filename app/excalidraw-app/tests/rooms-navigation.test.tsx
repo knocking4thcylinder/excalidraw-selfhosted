@@ -29,7 +29,7 @@ import {
   readRoomDraft,
   saveRoomDraft,
 } from "../data/roomCache";
-import { loadFilesFromFirebase } from "../data/firebase";
+import { downloadRoomFiles } from "../data/roomFiles";
 
 import ExcalidrawApp from "../App";
 import {
@@ -75,18 +75,13 @@ Object.defineProperty(window, "crypto", {
   },
 });
 
-vi.mock("../data/firebase", () => ({
-  loadFromFirebase: async () => null,
-  saveToFirebase: async () => {},
-  isSavedToFirebase: () => true,
-  loadFilesFromFirebase: vi.fn(async () => ({
+vi.mock("../data/roomFiles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../data/roomFiles")>()),
+  downloadRoomFiles: vi.fn(async () => ({
     loadedFiles: [],
     erroredFiles: new Map(),
   })),
-  saveFilesToFirebase: async () => ({
-    savedFiles: new Map(),
-    erroredFiles: new Map(),
-  }),
+  uploadRoomFiles: async () => ({ savedFiles: [], erroredFiles: [] }),
 }));
 
 vi.mock("../data/rooms", async (importOriginal) => ({
@@ -160,7 +155,7 @@ beforeEach(async () => {
   appJotaiStore.set(roomsRegistryAtom, null);
   appJotaiStore.set(roomFoldersAtom, null);
   socketState.announceFirstInRoom = true;
-  vi.mocked(loadFilesFromFirebase).mockResolvedValue({
+  vi.mocked(downloadRoomFiles).mockResolvedValue({
     loadedFiles: [],
     erroredFiles: new Map(),
   });
@@ -242,7 +237,7 @@ describe("Explorer room navigation", () => {
       );
       expect(window.collab.portal.socket).toBeNull();
       expect(loadRoomFromServer).not.toHaveBeenCalled();
-      expect(loadFilesFromFirebase).not.toHaveBeenCalled();
+      expect(downloadRoomFiles).not.toHaveBeenCalled();
       await act(async () => {
         const repeated = await window.collab.startCollaboration(room);
         expect(repeated?.elements?.[0].id).toBe("cached-drawing");
@@ -354,7 +349,7 @@ describe("Explorer room navigation", () => {
           null,
         ),
       });
-      await window.collab.saveCollabRoomToFirebase(
+      await window.collab.saveCollabRoom(
         getSyncableElements(
           window.collab.props.excalidrawAPI.getSceneElementsIncludingDeleted(),
         ),
@@ -436,7 +431,7 @@ describe("Explorer room navigation", () => {
     expect(window.collab.fileManager.isFileSavedOrBeingSaved(imageFile)).toBe(
       false,
     );
-    expect(loadFilesFromFirebase).not.toHaveBeenCalled();
+    expect(downloadRoomFiles).not.toHaveBeenCalled();
     await act(async () => {
       resolveSnapshot(imageScene);
     });
@@ -458,9 +453,9 @@ describe("Explorer room navigation", () => {
     ]);
     vi.mocked(loadRoomFromServer).mockResolvedValueOnce(imageScene);
     let resolveDownload!: (
-      result: Awaited<ReturnType<typeof loadFilesFromFirebase>>,
+      result: Awaited<ReturnType<typeof downloadRoomFiles>>,
     ) => void;
-    vi.mocked(loadFilesFromFirebase).mockImplementationOnce(
+    vi.mocked(downloadRoomFiles).mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveDownload = resolve;
@@ -468,7 +463,7 @@ describe("Explorer room navigation", () => {
     );
     await render(<ExcalidrawApp />);
     await openRoom("Algebra");
-    await waitFor(() => expect(loadFilesFromFirebase).toHaveBeenCalled());
+    await waitFor(() => expect(downloadRoomFiles).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: "Physics" }));
     await waitFor(() =>
       expect(window.h.elements[0]?.id).toBe("room-b-drawing"),
@@ -836,9 +831,7 @@ describe("Explorer room navigation", () => {
         ]),
       );
       await act(async () => {
-        await window.collab.saveCollabRoomToFirebase(
-          createDrawing("live-drawing"),
-        );
+        await window.collab.saveCollabRoom(createDrawing("live-drawing"));
       });
       expect(saveRoomToServer).not.toHaveBeenCalled();
       await act(async () => {

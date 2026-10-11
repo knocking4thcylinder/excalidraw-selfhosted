@@ -1,5 +1,5 @@
 defmodule Whiteboard.API do
-  alias Whiteboard.{Scenes, Store}
+  alias Whiteboard.{Files, Scenes, Store}
   @id ~r/^[A-Za-z0-9_-]{1,64}$/
   @alphabet "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
@@ -20,9 +20,12 @@ defmodule Whiteboard.API do
   end
 
   def dispatch("GET", ["s", code], _payload, _query, _headers) do
-    case Store.get("codes", String.upcase(code)) do
-      nil -> error(404, "unknown code")
-      value -> {302, nil, [{"location", value["url"]}]}
+    with %{"url" => url} <- Store.get("codes", String.upcase(code)),
+         [fragment] <- Regex.run(~r/room=[A-Za-z0-9_-]+,[A-Za-z0-9_-]+/, url) do
+      # Redirect within this site only: the stored URL's host is client-supplied.
+      {302, nil, [{"location", "/#" <> fragment}]}
+    else
+      _ -> error(404, "unknown code")
     end
   end
 
@@ -62,6 +65,9 @@ defmodule Whiteboard.API do
       _ -> error(400, "invalid roomId or roomKey")
     end
   end
+
+  # Cheap reachability probe for offline clients; never returns room data.
+  def dispatch("HEAD", ["api", "rooms"], _payload, _query, _headers), do: {200, nil, []}
 
   def dispatch("GET", ["api", "rooms"], _payload, _query, _headers) do
     folders = Store.all("folders")
@@ -152,7 +158,26 @@ defmodule Whiteboard.API do
   defp room_action("DELETE", [], id, _room, _payload, _query, _headers) do
     Store.delete("rooms", id)
     Scenes.delete(id)
+    Files.delete_room(id)
+    delete_codes(id)
     ok(%{ok: true})
+  end
+
+  defp room_action("PUT", ["files", file_id], id, _room, {:binary, data}, _query, _headers)
+       when byte_size(data) > 0 do
+    if Regex.match?(@id, file_id) do
+      Files.put(id, file_id, data)
+      ok(%{ok: true})
+    else
+      error(400, "invalid file id")
+    end
+  end
+
+  defp room_action("GET", ["files", file_id], id, _room, _payload, _query, _headers) do
+    case Files.get(id, file_id) do
+      nil -> error(404, "unknown file")
+      data -> {200, {:binary, data}, []}
+    end
   end
 
   defp room_action("GET", ["scene-history"], id, _room, _payload, _query, _headers) do
@@ -387,6 +412,15 @@ defmodule Whiteboard.API do
       end)
 
     if expanded == deleted, do: deleted, else: descendants(expanded, folders)
+  end
+
+  # Short codes embed the room key, so they must not outlive the room.
+  defp delete_codes(room_id) do
+    for {code, %{"url" => url}} <- Store.all("codes"),
+        [_, room] <- [Regex.run(~r/#room=([A-Za-z0-9_-]+),/, url)],
+        normalize_id(room) == room_id do
+      Store.delete("codes", code)
+    end
   end
 
   defp new_code(codes) do

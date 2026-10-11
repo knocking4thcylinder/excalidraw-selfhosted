@@ -1,7 +1,7 @@
 # Elixir persistence API
 
-Phoenix HTTP endpoint + Ecto/SQLite API for rooms, folders, short codes and
-encrypted scene snapshots. It replaced the original Node `shortcode/server.js`,
+Phoenix HTTP endpoint + Ecto/SQLite API for rooms, folders, short codes,
+encrypted scene snapshots and encrypted room images. It replaced the original Node `shortcode/server.js`,
 which has been removed. The React frontend and Socket.IO collaboration service
 are separate.
 
@@ -14,7 +14,10 @@ are separate.
 - Ten previous checkpoints and the empty-overwrite guard are retained. A checkpoint's patch tail stays recoverable in history.
 - JSON responses have explicit Content-Length. No API response is publicly cached.
 - Successful scene writes increment a durable `X-Scene-Revision` header. This is a server revision, not Excalidraw's element-version sum.
-- Malformed JSON returns 400, request bodies over 5 MiB return 413, unknown routes return 404. Short-code targets are restricted to HTTP(S).
+- Malformed JSON returns 400, request bodies over 5 MiB return 413, unknown routes return 404. Short-code targets are restricted to HTTP(S); `/s/<code>` redirects only to `/#room=…` on this site, whatever host the stored URL names. Deleting a room deletes its short codes and image files.
+- Room images: `PUT /api/rooms/:id/files/:fileId?key=...` stores the raw encrypted blob (`application/octet-stream`, up to 5 MiB); `GET` on the same path returns it. Blobs live in the `room_files` table.
+- `HEAD /api/rooms` is a body-less reachability probe for offline clients.
+- The server is trusted: it stores room keys and `GET /api/rooms` returns them, so the encryption does not protect rooms from anyone who can reach this API.
 
 SQLite WAL replaces synchronous rewriting of the whole JSON collection with
 transactional per-record writes. Historical snapshots are separate records, so

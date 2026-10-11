@@ -29,7 +29,7 @@ import type { SyncableExcalidrawElement } from ".";
 import type { CachedRoomScene } from "./roomCache";
 
 const roomCacheGenerations = new Map<string, number>();
-const pendingSceneSaves = new WeakMap<Socket, Promise<void>>();
+const pendingSceneSaves = new WeakMap<Socket, Promise<unknown>>();
 const sceneSaveEpochs = new WeakMap<Socket, number>();
 const socketSceneBaselines = new WeakMap<
   Socket,
@@ -66,12 +66,15 @@ export const clearRoomSceneCache = () => {
 };
 
 // "My Rooms" registry + encrypted scene snapshots on the self-hosted shortcode
-// service (see /api/rooms endpoints). Server never sees plaintext: the room
-// key travels only as request body/query param, same trust model as
-// /api/resolve which stores full URLs incl. keys.
+// service (see /api/rooms endpoints). The server is trusted: it stores every
+// room key next to the ciphertext and the registry lists them so any device
+// can open any room. The encryption is kept for protocol compatibility with
+// the excalidraw-room relay; it does not protect rooms from the server or
+// from anyone who can reach its API.
 //
-// Error policy: register/save failures are console-only and must never block
-// collab; load returns null on any failure so the caller falls back to live
+// Error policy: failures never block collab. register failures are
+// console-only; saves resolve to a RoomSaveOutcome so the caller can surface
+// "failed"; load returns null on any failure so the caller falls back to live
 // socket sync.
 
 export type ServerRoomEntry = {
@@ -175,7 +178,7 @@ const toBase64 = (buffer: ArrayBuffer | Uint8Array): string => {
 const fromBase64 = (base64: string): Uint8Array =>
   Uint8Array.from(window.atob(base64), (c) => c.charCodeAt(0));
 
-// mirror of FirebaseSceneVersionCache in ./firebase.ts, so we don't re-save
+// remembers the last saved version per socket, so we don't re-save
 // unchanged scenes (and don't count them as unsaved in beforeUnload)
 class ServerSceneVersionCache {
   private static cache = new WeakMap<
@@ -325,6 +328,9 @@ type RoomPortal = {
   socket: Socket | null;
 };
 
+// "skipped": nothing to send, superseded, or conflict handed to onConflict.
+export type RoomSaveOutcome = "saved" | "failed" | "skipped";
+
 type SaveRoomOptions = {
   onConflict?: (
     elements: readonly SyncableExcalidrawElement[],
@@ -336,11 +342,11 @@ export const saveRoomToServer = (
   portal: RoomPortal,
   elements: readonly SyncableExcalidrawElement[],
   options?: SaveRoomOptions,
-): Promise<void> => {
+): Promise<RoomSaveOutcome> => {
   const capturedPortal = { ...portal };
   const socket = capturedPortal.socket;
   if (!socket) {
-    return Promise.resolve();
+    return Promise.resolve("skipped");
   }
   const snapshot = cloneJSON(elements);
   const cacheKey = JSON.stringify([
@@ -367,7 +373,7 @@ const saveRoomSnapshot = async (
   generation: number,
   epoch: number,
   options?: SaveRoomOptions,
-): Promise<void> => {
+): Promise<RoomSaveOutcome> => {
   try {
     const { roomId, roomKey, socket } = portal;
     if (
@@ -375,14 +381,16 @@ const saveRoomSnapshot = async (
       !roomId ||
       !roomKey ||
       !socket ||
-      epoch !== (sceneSaveEpochs.get(socket) ?? 0) ||
-      isSavedToServer(portal, elements)
+      epoch !== (sceneSaveEpochs.get(socket) ?? 0)
     ) {
-      return;
+      return "skipped";
+    }
+    if (isSavedToServer(portal, elements)) {
+      return "saved";
     }
     const cacheKey = JSON.stringify([roomId, roomKey]);
     if (generation !== (roomCacheGenerations.get(cacheKey) ?? 0)) {
-      return;
+      return "skipped";
     }
     const sessionBaseline = socketSceneBaselines.get(socket);
     const baseline =
@@ -411,7 +419,7 @@ const saveRoomSnapshot = async (
           console.warn(
             "rooms: refusing to overwrite stored snapshot with empty scene",
           );
-          return;
+          return "skipped";
         }
       } catch {
         // probe failed — fall through and let the save attempt report itself
@@ -438,7 +446,7 @@ const saveRoomSnapshot = async (
       !patch.order
     ) {
       ServerSceneVersionCache.set(socket, elements);
-      return;
+      return "saved";
     }
     let usePatch =
       !!patchJSON &&
@@ -477,7 +485,7 @@ const saveRoomSnapshot = async (
       resp = await send();
     }
     if (!resp || !isCurrentRoom()) {
-      return;
+      return "skipped";
     }
 
     if (resp.ok) {
@@ -492,6 +500,7 @@ const saveRoomSnapshot = async (
         socketSceneBaselines.set(socket, { cacheKey, scene: confirmed });
         await cacheRoomScene(roomId, roomKey, confirmed);
       }
+      return "saved";
     } else if (resp.status === 412) {
       try {
         if (options?.onConflict) {
@@ -511,11 +520,13 @@ const saveRoomSnapshot = async (
         sceneSaveEpochs.set(socket, (sceneSaveEpochs.get(socket) ?? 0) + 1);
         throw error;
       }
-    } else {
-      console.error("rooms: scene save failed", resp.status);
+      return "skipped";
     }
+    console.error("rooms: scene save failed", resp.status);
+    return "failed";
   } catch (error: any) {
     console.error("rooms: scene save failed", error);
+    return "failed";
   }
 };
 

@@ -3,10 +3,12 @@ import { resolvablePromise } from "@excalidraw/common";
 import { vi } from "vitest";
 import { API } from "@excalidraw/excalidraw/tests/helpers/api";
 
+import { generateEncryptionKey } from "@excalidraw/excalidraw/data/encryption";
+
 import type { FileId } from "@excalidraw/element/types";
 import type { BinaryFileData, DataURL } from "@excalidraw/excalidraw/types";
 
-import { FileManager } from "../data/FileManager";
+import { encodeFilesForUpload, FileManager } from "../data/FileManager";
 import {
   cacheRoomFiles,
   cacheRoomScene,
@@ -15,7 +17,11 @@ import {
   forgetCachedRoom,
   readCachedRoomFiles,
 } from "../data/roomCache";
-import { loadRoomFiles } from "../data/roomFiles";
+import {
+  downloadRoomFiles,
+  loadRoomFiles,
+  uploadRoomFiles,
+} from "../data/roomFiles";
 
 const file = (id = "image"): BinaryFileData => ({
   id: id as FileId,
@@ -258,5 +264,79 @@ describe("room-switch attachment races", () => {
     });
     expect((await saving).savedFiles.size).toBe(0);
     expect(manager.isFileSavedOrBeingSaved(file())).toBe(false);
+  });
+});
+
+describe("room file transport", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("uploads encrypted blobs to the room API and decodes them on download", async () => {
+    const roomKey = await generateEncryptionKey();
+    const image = file("image-a");
+    const stored = new Map<string, ArrayBuffer>();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        stored.set(url, await new Response(init.body).arrayBuffer());
+        return new Response(JSON.stringify({ ok: true }));
+      }
+      const body = stored.get(url);
+      return body ? new Response(body) : new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const uploaded = await uploadRoomFiles({
+      roomId: "room/a",
+      roomKey,
+      files: await encodeFilesForUpload({
+        files: new Map([[image.id, image]]),
+        encryptionKey: roomKey,
+        maxBytes: 1024 * 1024,
+      }),
+    });
+    expect(uploaded).toEqual({ savedFiles: [image.id], erroredFiles: [] });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `/api/rooms/room%2Fa/files/image-a?key=${encodeURIComponent(roomKey)}`,
+    );
+    expect(new TextDecoder().decode(stored.get(url))).not.toContain(
+      image.dataURL,
+    );
+    expect(init?.headers).toEqual({
+      "content-type": "application/octet-stream",
+    });
+
+    const downloaded = await downloadRoomFiles("room/a", roomKey, [
+      image.id,
+      "missing" as FileId,
+    ]);
+    expect(downloaded.loadedFiles).toEqual([
+      expect.objectContaining({
+        id: image.id,
+        dataURL: image.dataURL,
+        mimeType: image.mimeType,
+      }),
+    ]);
+    expect([...downloaded.erroredFiles.keys()]).toEqual(["missing"]);
+  });
+
+  it("reports rejected and failed uploads as errored", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 403 }))
+        .mockRejectedValueOnce(new TypeError("offline")),
+    );
+    const buffer = new Uint8Array([1]);
+    const result = await uploadRoomFiles({
+      roomId: "room",
+      roomKey: "key",
+      files: [
+        { id: "a" as FileId, buffer },
+        { id: "b" as FileId, buffer },
+      ],
+    });
+    expect(result.savedFiles).toEqual([]);
+    expect(result.erroredFiles.sort()).toEqual(["a", "b"]);
   });
 });

@@ -6,6 +6,7 @@ defmodule Whiteboard.APITest do
 
   setup do
     Repo.delete_all(Record)
+    Repo.delete_all(Whiteboard.RoomFile)
     :ok
   end
 
@@ -79,10 +80,58 @@ defmodule Whiteboard.APITest do
     assert json(request(:get, "/api/resolve/#{String.downcase(code)}"))["url"] == expected
     redirect = request(:get, "/s/#{code}")
     assert redirect.status == 302
-    assert get_resp_header(redirect, "location") == [expected]
+    assert get_resp_header(redirect, "location") == ["/#room=Room-ID,Secret_KEY"]
     assert request(:get, "/api/resolve/UNKNOWN").status == 404
     assert request(:post, "/api/code", %{url: "not a room"}).status == 400
     assert request(:post, "/api/code", %{url: "javascript:alert(1)#room=a,b"}).status == 400
+  end
+
+  test "short code redirects stay on this site and codes die with their room" do
+    register("ROOM")
+
+    other =
+      json(request(:post, "/api/code", %{url: "https://deck.example/#room=other,k"}))["code"]
+
+    evil =
+      json(request(:post, "/api/code", %{url: "https://evil.example/\\x#room=room,secret"}))[
+        "code"
+      ]
+
+    assert get_resp_header(request(:get, "/s/#{evil}"), "location") == ["/#room=room,secret"]
+
+    assert request(:delete, "/api/rooms/room", %{key: "secret"}).status == 200
+    assert request(:get, "/api/resolve/#{evil}").status == 404
+    assert request(:get, "/s/#{evil}").status == 404
+    assert request(:get, "/api/resolve/#{other}").status == 200
+  end
+
+  test "room files store opaque bytes behind the room key and die with the room" do
+    register()
+    blob = <<0, 255, 1, 2, 3>> <> String.duplicate("x", 70_000)
+    put = fn path -> conn(:put, path, blob) |> Router.call(Router.init([])) end
+
+    assert put.("/api/rooms/room/files/abc123?key=wrong").status == 403
+    assert put.("/api/rooms/missing/files/abc123?key=secret").status == 404
+    assert put.("/api/rooms/room/files/bad.id?key=secret").status == 400
+    assert put.("/api/rooms/room/files/abc123?key=secret").status == 200
+
+    fetched = request(:get, "/api/rooms/room/files/abc123?key=secret")
+    assert fetched.status == 200
+    assert fetched.resp_body == blob
+    assert get_resp_header(fetched, "content-type") == ["application/octet-stream"]
+    assert request(:get, "/api/rooms/room/files/abc123?key=wrong").status == 403
+    assert request(:get, "/api/rooms/room/files/other?key=secret").status == 404
+
+    assert request(:delete, "/api/rooms/room", %{key: "secret"}).status == 200
+    register()
+    assert request(:get, "/api/rooms/room/files/abc123?key=secret").status == 404
+  end
+
+  test "HEAD /api/rooms is a body-less reachability probe" do
+    register()
+    probe = request(:head, "/api/rooms")
+    assert probe.status == 200
+    assert probe.resp_body == ""
   end
 
   test "folders preserve nesting, reject cycles and delete subtrees without deleting scenes" do

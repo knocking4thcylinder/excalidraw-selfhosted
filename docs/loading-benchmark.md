@@ -108,7 +108,7 @@ JavaScript and CSS have warm HTTP/service-worker caches in these runs.
 The large fixture contains 2,400 freedraw elements, 32 points each, occupying
 2,175,811 plaintext JSON bytes. The image fixture contains 16 saved image elements
 with procedural 256 × 256 PNGs: 3,609,504 encrypted asset bytes in total. Encryption
-and envelope encoding match the app; the benchmark intercepts Firebase image URLs
+and envelope encoding match the app; the benchmark intercepts room image URLs
 and serves synthetic encrypted assets locally.
 
 The local large scene becomes available before validation, despite the 1.5-second

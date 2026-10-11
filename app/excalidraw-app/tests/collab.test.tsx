@@ -31,27 +31,14 @@ Object.defineProperty(window, "crypto", {
   },
 });
 
-vi.mock("../../excalidraw-app/data/firebase.ts", () => {
-  const loadFromFirebase = async () => null;
-  const saveToFirebase = () => {};
-  const isSavedToFirebase = () => true;
-  const loadFilesFromFirebase = async () => ({
+vi.mock("../data/roomFiles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../data/roomFiles")>()),
+  downloadRoomFiles: async () => ({
     loadedFiles: [],
-    erroredFiles: [],
-  });
-  const saveFilesToFirebase = async () => ({
-    savedFiles: new Map(),
     erroredFiles: new Map(),
-  });
-
-  return {
-    loadFromFirebase,
-    saveToFirebase,
-    isSavedToFirebase,
-    loadFilesFromFirebase,
-    saveFilesToFirebase,
-  };
-});
+  }),
+  uploadRoomFiles: async () => ({ savedFiles: [], erroredFiles: [] }),
+}));
 
 vi.mock("socket.io-client", () => {
   return {

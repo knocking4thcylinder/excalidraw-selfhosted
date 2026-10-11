@@ -224,9 +224,9 @@ const bootScript = `(() => {
   const nativeFetch = ownerWindow.fetch.bind(ownerWindow);
   ownerWindow.fetch = async (input, options) => {
     let address = typeof input === "string" ? input : input.url || String(input);
-    if (address.includes("firebasestorage.googleapis.com")) {
-      const fileId = decodeURIComponent(new URL(address).pathname).split("/").pop();
-      address = "/__bench/assets/" + encodeURIComponent(fileId);
+    const roomFile = address.match(new RegExp("/api/rooms/[^/]+/files/([^/?]+)"));
+    if (roomFile && (options?.method || "GET") === "GET") {
+      address = "/__bench/assets/" + roomFile[1];
       input = address;
     }
     const tracked = address.includes("/api/rooms") || address.includes("/__bench/assets/");

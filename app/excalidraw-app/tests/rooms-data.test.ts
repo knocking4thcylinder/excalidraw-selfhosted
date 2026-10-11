@@ -1,7 +1,10 @@
 import { vi } from "vitest";
 import { clear, createStore } from "idb-keyval";
 
-import { decryptData } from "@excalidraw/excalidraw/data/encryption";
+import {
+  decryptData,
+  generateEncryptionKey,
+} from "@excalidraw/excalidraw/data/encryption";
 
 import {
   flushRoomCache,
@@ -63,6 +66,47 @@ describe("room snapshot requests", () => {
     await saveRoomToServer({ roomId: "room-a", roomKey: "key-a", socket }, []);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1].method).toBe("HEAD");
+  });
+
+  it("resolves a save to an outcome the caller can surface", async () => {
+    const roomKey = await generateEncryptionKey();
+    const socket = {} as NonNullable<
+      Parameters<typeof saveRoomToServer>[0]["socket"]
+    >;
+    const elements = [
+      {
+        id: "drawing",
+        type: "rectangle",
+        version: 2,
+        versionNonce: 1,
+        isDeleted: false,
+        index: "a0",
+      },
+    ] as unknown as Parameters<typeof saveRoomToServer>[1];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 500 })),
+    );
+    expect(
+      await saveRoomToServer({ roomId: "room-a", roomKey, socket }, elements),
+    ).toBe("failed");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ok: true }), {
+          headers: { etag: '"saved"' },
+        }),
+      ),
+    );
+    expect(
+      await saveRoomToServer({ roomId: "room-a", roomKey, socket }, elements),
+    ).toBe("saved");
+    expect(
+      await saveRoomToServer(
+        { roomId: "room-a", roomKey, socket: null },
+        elements,
+      ),
+    ).toBe("skipped");
   });
 
   it("reports progress while reading each snapshot chunk", async () => {

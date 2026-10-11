@@ -63,18 +63,13 @@ vi.mock("../data/sceneStorage", async (importOriginal) => ({
   saveRoomBackup: async () => {},
 }));
 
-vi.mock("../data/firebase", () => ({
-  loadFromFirebase: async () => null,
-  saveToFirebase: async () => {},
-  isSavedToFirebase: () => true,
-  loadFilesFromFirebase: async () => ({
+vi.mock("../data/roomFiles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../data/roomFiles")>()),
+  downloadRoomFiles: async () => ({
     loadedFiles: [],
     erroredFiles: new Map(),
   }),
-  saveFilesToFirebase: async () => ({
-    savedFiles: new Map(),
-    erroredFiles: new Map(),
-  }),
+  uploadRoomFiles: async () => ({ savedFiles: [], erroredFiles: [] }),
 }));
 
 vi.mock("../data/rooms", async (importOriginal) => ({

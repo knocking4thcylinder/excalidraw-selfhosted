@@ -60,7 +60,6 @@ import { readRoomBackup, saveRoomBackup } from "../data/sceneStorage";
 import {
   CURSOR_SYNC_TIMEOUT,
   FILE_UPLOAD_MAX_BYTES,
-  FIREBASE_STORAGE_PREFIXES,
   INITIAL_SCENE_UPDATE_TIMEOUT,
   LOAD_IMAGES_TIMEOUT,
   WS_SUBTYPES,
@@ -81,13 +80,6 @@ import {
 import { FileStatusStore } from "../data/fileStatusStore";
 import { LocalData } from "../data/LocalData";
 import {
-  isSavedToFirebase,
-  loadFilesFromFirebase,
-  loadFromFirebase,
-  saveFilesToFirebase,
-  saveToFirebase,
-} from "../data/firebase";
-import {
   importUsernameFromLocalStorage,
   saveUsernameToLocalStorage,
 } from "../data/localStorage";
@@ -98,6 +90,7 @@ import {
   registerRoom,
   saveRoomToServer,
 } from "../data/rooms";
+
 import { resetBrowserStateVersions } from "../data/tabSync";
 import {
   cacheRoomFiles,
@@ -109,10 +102,16 @@ import {
   readRoomDraft,
   saveRoomDraft,
 } from "../data/roomCache";
-import { loadRoomFiles } from "../data/roomFiles";
+import {
+  downloadRoomFiles,
+  loadRoomFiles,
+  uploadRoomFiles,
+} from "../data/roomFiles";
 
 import { collabErrorIndicatorAtom } from "./CollabError";
 import Portal from "./Portal";
+
+import type { RoomSaveOutcome } from "../data/rooms";
 
 import type { ContextType } from "react";
 import type {
@@ -181,7 +180,7 @@ export interface CollabAPI {
   startCollaboration: CollabInstance["startCollaboration"];
   stopCollaboration: CollabInstance["stopCollaboration"];
   syncElements: CollabInstance["syncElements"];
-  fetchImageFilesFromFirebase: CollabInstance["fetchImageFilesFromFirebase"];
+  fetchImageFiles: CollabInstance["fetchImageFiles"];
   setUsername: CollabInstance["setUsername"];
   getUsername: CollabInstance["getUsername"];
   getActiveRoomLink: CollabInstance["getActiveRoomLink"];
@@ -275,8 +274,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
             .filter(isInitializedImageElement)
             .filter((element) => element.status !== "saved")
             .map((element) => element.fileId),
-          download: (missing) =>
-            loadFilesFromFirebase(`files/rooms/${roomId}`, roomKey, missing),
+          download: (missing) => downloadRoomFiles(roomId, roomKey, missing),
           onCachedFiles: (files) => {
             if (this.isPortalCurrent(socket, roomId, roomKey)) {
               this.excalidrawAPI.addFiles(files);
@@ -295,8 +293,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         }
 
         await cacheRoomFiles(roomId, roomKey, [...addedFiles.values()]);
-        const { savedFiles, erroredFiles } = await saveFilesToFirebase({
-          prefix: `${FIREBASE_STORAGE_PREFIXES.collabFiles}/${roomId}`,
+        const { savedFiles, erroredFiles } = await uploadRoomFiles({
+          roomId,
+          roomKey,
           files: await encodeFilesForUpload({
             files: addedFiles,
             encryptionKey: roomKey,
@@ -376,7 +375,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       onPointerUpdate: this.onPointerUpdate,
       startCollaboration: this.startCollaboration,
       syncElements: this.syncElements,
-      fetchImageFilesFromFirebase: this.fetchImageFilesFromFirebase,
+      fetchImageFiles: this.fetchImageFiles,
       stopCollaboration: this.stopCollaboration,
       setUsername: this.setUsername,
       getUsername: this.getUsername,
@@ -442,7 +441,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       !appJotaiStore.get(offlineRoomPendingAtom) &&
       this.portal.socketInitialized
     ) {
-      this.saveCollabRoomToFirebase(
+      this.saveCollabRoom(
         getSyncableElements(this.getSceneElementsIncludingDeleted()),
       );
     }
@@ -487,7 +486,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       const timer = window.setTimeout(() => controller.abort(), 3000);
       try {
         const resp = await fetch("/api/rooms", {
-          method: "GET",
+          method: "HEAD",
           cache: "no-store",
           signal: controller.signal,
         });
@@ -543,7 +542,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.saveRoomBackupThrottled.flush();
     this.saveRoomBackupThrottled.cancel();
     this.queueBroadcastAllElements.cancel();
-    this.queueSaveToFirebase.cancel();
+    this.queueSaveRoom.cancel();
     this.loadImageFiles.cancel();
     this.destroySocketClient({ isUnload: true });
     if (
@@ -610,12 +609,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (
       this.isCollaborating() &&
       (this.fileManager.shouldPreventUnload(syncableElements) ||
-        (!isSavedToFirebase(this.portal, syncableElements) &&
-          !isSavedToServer(this.portal, syncableElements)))
+        !isSavedToServer(this.portal, syncableElements))
     ) {
       // this won't run in time if user decides to leave the site, but
       //  the purpose is to run in immediately after user decides to stay
-      this.saveCollabRoomToFirebase(syncableElements);
+      this.saveCollabRoom(syncableElements);
 
       if (import.meta.env.VITE_APP_DISABLE_PREVENT_UNLOAD !== "true") {
         preventUnload(event);
@@ -627,9 +625,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   });
 
-  saveCollabRoomToFirebase = async (
-    syncableElements: readonly SyncableExcalidrawElement[],
-  ) => {
+  saveCollabRoom = (syncableElements: readonly SyncableExcalidrawElement[]) => {
     // While an offline recovery is pending, the canvas holds state the
     // server hasn't seen merged yet — pushing it now would overwrite the
     // good snapshot with a partial one. The merged scene saves itself once
@@ -638,11 +634,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       return;
     }
     syncableElements = cloneJSON(syncableElements);
-    // self-hosted fork: mirror every save to the /api/rooms registry (always
-    // on, unlike the env-gated firebase save below). Fire-and-forget —
-    // failures are console-only and must never block collab.
+    // Fire-and-forget: a failed save never blocks collab, but it does show
+    // the collab error indicator until the next successful save.
     const { socket, roomId, roomKey } = this.portal;
-    void saveRoomToServer(this.portal, syncableElements, {
+    const saving = saveRoomToServer(this.portal, syncableElements, {
       onConflict: (latest, baseline) => {
         if (
           !this.isPortalCurrent(socket, roomId, roomKey) ||
@@ -665,41 +660,23 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         this.syncElements(reconciled);
       },
     });
-    try {
-      const storedElements = await saveToFirebase(
-        this.portal,
-        syncableElements,
-        this.excalidrawAPI.getAppState(),
-      );
+    void this.reportRoomSave(saving, socket, roomId, roomKey);
+  };
 
+  private reportRoomSave = async (
+    saving: Promise<RoomSaveOutcome>,
+    socket: Portal["socket"],
+    roomId: Portal["roomId"],
+    roomKey: Portal["roomKey"],
+  ) => {
+    const outcome = await saving;
+    if (!this.isPortalCurrent(socket, roomId, roomKey)) {
+      return;
+    }
+    if (outcome === "saved") {
       this.resetErrorIndicator();
-
-      if (this.isCollaborating() && storedElements) {
-        this.handleRemoteSceneUpdate(this._reconcileElements(storedElements));
-      }
-    } catch (error: any) {
-      const errorMessage = /is longer than.*?bytes/.test(error.message)
-        ? t("errors.collabSaveFailed_sizeExceeded")
-        : t("errors.collabSaveFailed");
-
-      if (
-        !this.state.dialogNotifiedErrors[errorMessage] ||
-        !this.isCollaborating()
-      ) {
-        this.setErrorDialog(errorMessage);
-        this.setState({
-          dialogNotifiedErrors: {
-            ...this.state.dialogNotifiedErrors,
-            [errorMessage]: true,
-          },
-        });
-      }
-
-      if (this.isCollaborating()) {
-        this.setErrorIndicator(errorMessage);
-      }
-
-      console.error(error);
+    } else if (outcome === "failed") {
+      this.setErrorIndicator(t("errors.collabSaveFailed"));
     }
   };
 
@@ -715,11 +692,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
     this.rememberPreparedRoom();
     this.queueBroadcastAllElements.cancel();
-    this.queueSaveToFirebase.cancel();
+    this.queueSaveRoom.cancel();
     this.loadImageFiles.cancel();
     this.resetErrorIndicator(true);
 
-    this.saveCollabRoomToFirebase(
+    this.saveCollabRoom(
       getSyncableElements(
         this.excalidrawAPI.getSceneElementsIncludingDeleted(),
       ),
@@ -787,7 +764,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   };
 
-  private fetchImageFilesFromFirebase = async (opts: {
+  private fetchImageFiles = async (opts: {
     elements: readonly ExcalidrawElement[];
     /**
      * Indicates whether to fetch files that are errored or pending and older
@@ -946,10 +923,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     generation: number,
     scenePromise: NonNullable<Collab["pendingScenePromise"]>,
   ) => {
-    if (
-      this.offlineRecoveryPending ||
-      import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE === "true"
-    ) {
+    if (this.offlineRecoveryPending) {
       return;
     }
     const cacheKey = JSON.stringify([room.roomId, room.roomKey]);
@@ -1055,8 +1029,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (
       !roomId ||
       !roomKey ||
-      (!this.offlineRecoveryPending && !this.portal.socketInitialized) ||
-      import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE === "true"
+      (!this.offlineRecoveryPending && !this.portal.socketInitialized)
     ) {
       return;
     }
@@ -1161,9 +1134,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
     let roomInitialization: ReturnType<Collab["initializeRoom"]> | null = null;
     let peerInitializationStarted = false;
-    const loadSavedSceneImmediately =
-      !!existingRoomLinkData &&
-      import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE !== "true";
+    const loadSavedSceneImmediately = !!existingRoomLinkData;
     const fallbackInitializationHandler = () => {
       roomInitialization ??= this.initializeRoom({
         roomLinkData: existingRoomLinkData,
@@ -1193,9 +1164,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
     try {
       this.portal.socket = this.portal.open(
-        socketIOClient(import.meta.env.VITE_APP_WS_SERVER_URL, {
-          transports: ["websocket", "polling"],
-        }),
+        // Empty in production builds: the room server sits behind the same
+        // Caddy origin as the app (/socket.io/*).
+        socketIOClient(
+          import.meta.env.VITE_APP_WS_SERVER_URL || window.location.origin,
+          {
+            transports: ["websocket", "polling"],
+          },
+        ),
         roomId,
         roomKey,
       );
@@ -1239,7 +1215,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         captureUpdate: CaptureUpdateAction.NEVER,
       });
 
-      this.saveCollabRoomToFirebase(getSyncableElements(elements));
+      this.saveCollabRoom(getSyncableElements(elements));
       // A freshly created room owns its canvas seed: local saves resume at
       // once so the seed itself is crash-safe from the first second.
       LocalData.resumeSave("collaboration");
@@ -1331,7 +1307,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
                 }
               }
               this.handleRemoteSceneUpdate(reconciledElements);
-              // noop if already resolved via init from firebase
+              // noop if already resolved via the saved snapshot
               scenePromise.resolve({
                 elements: reconciledElements,
                 scrollToContent: true,
@@ -1491,23 +1467,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // holds yet; the explicit switch paths (Rooms open, hashchange) wipe
       // the canvas themselves before starting.
       const loadFromServerFirst = async () => {
-        try {
-          const elements = await loadFromFirebase(
-            roomLinkData.roomId,
-            roomLinkData.roomKey,
-            socket,
-          );
-          if (elements) {
-            return elements;
-          }
-        } catch (error: any) {
-          // log the error and move on. other peers will sync us the scene.
-          console.error(error);
-        }
-
-        // self-hosted fork: fall back to the /api/rooms snapshot when
-        // firebase has nothing (or is disabled). Returns null on any
-        // failure, in which case other peers will sync us the scene.
+        // A missing snapshot resolves to null, in which case other peers will
+        // sync us the scene.
         const ownerWindow = this.context.container?.ownerDocument.defaultView;
         const controller = ownerWindow
           ? new ownerWindow.AbortController()
@@ -1544,12 +1505,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           return null;
         }
       }
-      if (
-        !cachedPreview &&
-        !wasInitialized &&
-        !this.offlineRecoveryPending &&
-        import.meta.env.VITE_APP_ENABLE_FIREBASE_SAVE !== "true"
-      ) {
+      if (!cachedPreview && !wasInitialized && !this.offlineRecoveryPending) {
         const [cached, draft, backup] = await Promise.all([
           readCachedRoomScene(roomLinkData.roomId, roomLinkData.roomKey),
           readRoomDraft(roomLinkData.roomId, roomLinkData.roomKey),
@@ -1729,7 +1685,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       LocalData.resumeSave("collaboration");
       if (this.offlineRecoveryPending) {
         this.clearOfflinePending();
-        this.queueSaveToFirebase();
+        this.queueSaveRoom();
         return null;
       }
       this.resetRoomScene();
@@ -1865,10 +1821,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
     this.excalidrawAPI.addFiles(cachedFiles);
     try {
-      const { loadedFiles, erroredFiles } =
-        await this.fetchImageFilesFromFirebase({
-          elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
-        });
+      const { loadedFiles, erroredFiles } = await this.fetchImageFiles({
+        elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+      });
 
       if (!isCurrentRoom()) {
         return;
@@ -2050,7 +2005,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   syncElements = (elements: readonly OrderedExcalidrawElement[]) => {
     this.broadcastElements(elements);
-    this.queueSaveToFirebase();
+    this.queueSaveRoom();
     // Crash-safety: persist every edit locally, even while collaborating.
     // The roomId is stable for the session; the backup restores after a
     // crash even if the server snapshot lags behind.
@@ -2077,10 +2032,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.setLastBroadcastedOrReceivedSceneVersion(newVersion);
   }, SYNC_FULL_SCENE_INTERVAL_MS);
 
-  queueSaveToFirebase = throttle(
+  queueSaveRoom = throttle(
     () => {
       if (this.portal.socketInitialized) {
-        this.saveCollabRoomToFirebase(
+        this.saveCollabRoom(
           getSyncableElements(
             this.excalidrawAPI.getSceneElementsIncludingDeleted(),
           ),

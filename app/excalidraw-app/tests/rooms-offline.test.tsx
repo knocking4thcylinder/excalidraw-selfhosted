@@ -46,27 +46,14 @@ vi.mock("socket.io-client", () => {
   };
 });
 
-vi.mock("../../excalidraw-app/data/firebase.ts", () => {
-  const loadFromFirebase = async () => null;
-  const saveToFirebase = () => {};
-  const isSavedToFirebase = () => true;
-  const loadFilesFromFirebase = async () => ({
+vi.mock("../data/roomFiles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../data/roomFiles")>()),
+  downloadRoomFiles: async () => ({
     loadedFiles: [],
-    erroredFiles: [] as never[],
-  });
-  const saveFilesToFirebase = async () => ({
-    savedFiles: [],
     erroredFiles: new Map(),
-  });
-
-  return {
-    loadFromFirebase,
-    saveToFirebase,
-    isSavedToFirebase,
-    loadFilesFromFirebase,
-    saveFilesToFirebase,
-  };
-});
+  }),
+  uploadRoomFiles: async () => ({ savedFiles: [], erroredFiles: [] }),
+}));
 
 // loadRoomFromServer delegates to a swappable impl: fail-closed for the
 // offline leg (same as a rejected fetch), canned snapshot for reconnect.

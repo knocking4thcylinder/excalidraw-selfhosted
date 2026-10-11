@@ -11,3 +11,14 @@ defmodule Whiteboard.Record do
     field(:value, :map)
   end
 end
+
+defmodule Whiteboard.RoomFile do
+  use Ecto.Schema
+
+  @primary_key false
+  schema "room_files" do
+    field(:room_id, :string, primary_key: true)
+    field(:file_id, :string, primary_key: true)
+    field(:data, :binary)
+  end
+end
