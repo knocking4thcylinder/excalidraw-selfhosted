@@ -218,18 +218,39 @@ export const cacheRoomScene = (
     await set("scene-index", index.slice(0, MAX_CACHED_SCENES), cacheStore);
     for (const expired of index.slice(MAX_CACHED_SCENES)) {
       const [, expiredRoomId, expiredRoomKey] = JSON.parse(expired) as string[];
-      bumpRoomMeta(
-        getRoomMeta(expiredRoomId, expiredRoomKey),
-        "generation",
-        "scene",
-      );
+      const expiredMeta = getRoomMeta(expiredRoomId, expiredRoomKey);
       const resident = roomMemory.get(
         roomScopeKey(expiredRoomId, expiredRoomKey),
       );
+      // A draft without its baseline would be merged as a plain union and
+      // resurrect shapes removed elsewhere, so it leaves with the scene
+      // unless it still holds unsynced changes.
+      const draftKey = roomCacheKey("draft", expiredRoomId, expiredRoomKey);
+      const expiredScene =
+        resident?.scene ?? (await get<CachedRoomScene>(expired, cacheStore));
+      const draft =
+        resident?.draft ??
+        (await get<readonly SyncableExcalidrawElement[]>(draftKey, cacheStore));
+      const draftSynced =
+        !!draft &&
+        !!expiredScene &&
+        getRoomChanges(expiredScene.elements, draft).length === 0;
+      bumpRoomMeta(
+        expiredMeta,
+        "generation",
+        "scene",
+        ...(draftSynced ? (["draft"] as const) : []),
+      );
       if (resident) {
         delete resident.scene;
+        if (draftSynced) {
+          delete resident.draft;
+        }
       }
       await del(expired, cacheStore);
+      if (draftSynced) {
+        await del(draftKey, cacheStore);
+      }
     }
   });
 };

@@ -121,6 +121,26 @@ describe("persistent room cache", () => {
     expect(await readRoomDraft("oldest", "key")).not.toBeNull();
   });
 
+  it("evicts a draft with its confirmed scene only when the draft holds no unsynced changes", async () => {
+    await cacheRoomScene("synced", "key", { etag: '"one"', elements: scene() });
+    await saveRoomDraft("synced", "key", scene());
+    await cacheRoomScene("edited", "key", { etag: '"one"', elements: scene() });
+    await saveRoomDraft("edited", "key", scene(2));
+    for (let index = 0; index < 32; index++) {
+      await cacheRoomScene(`room-${index}`, "key", {
+        etag: '"one"',
+        elements: scene(),
+      });
+    }
+    expect(await readCachedRoomScene("synced", "key")).toBeNull();
+    expect(await readCachedRoomScene("edited", "key")).toBeNull();
+    expect(await readRoomDraft("synced", "key")).toBeNull();
+    expect((await readRoomDraft("edited", "key"))?.[0].version).toBe(2);
+    clearRoomMemoryCache();
+    expect(await readRoomDraft("synced", "key")).toBeNull();
+    expect(await readRoomDraft("edited", "key")).not.toBeNull();
+  });
+
   it("persists registry and folder metadata independently", async () => {
     const rooms = [
       {
