@@ -204,11 +204,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   private socketInitializationTimer?: number;
   private roomLoadController: AbortController | null = null;
-  // True while the initial scene promise is already spent (empty) but an
-  // offline canvas may still receive its scene late: late arrivals must
-  // paint directly instead of relying on resolve(). Set on offline entry,
-  // cleared on the first successful load/save/stop.
-  private offlineRecoveryPending = false;
+  // True while the canvas holds local room work — a cached preview, the
+  // room draft, or strokes drawn offline — that has not been merged with the
+  // server scene yet. Server saves wait (they would overwrite the snapshot
+  // with a partial scene) and a late server scene is merged into the canvas
+  // instead of replacing it. Cleared once merged, or when leaving the room.
+  private localWorkPending = false;
   // Scene load shared with a second startCollaboration() racing the first
   // (double-mount/double-effect on boot): while set, a newcomer to the SAME
   // room awaits it instead of resolving null instantly and winning the race
@@ -402,8 +403,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private offlineRejoinInFlight = false;
-  private cachedRoomBaseline: readonly SyncableExcalidrawElement[] | null =
-    null;
+  // The confirmed scene the pending local work started from; only changes
+  // against it are merged, so shapes removed on the server stay removed.
+  private localWorkBaseline: readonly SyncableExcalidrawElement[] | null = null;
 
   private onVisibilityRetry = () => {
     if (this.context.container?.ownerDocument.visibilityState === "visible") {
@@ -537,7 +539,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       appJotaiStore.get(collabAPIAtom)?.startCollaboration ===
       this.startCollaboration
     ) {
-      this.clearOfflinePending();
+      this.clearLocalWorkPending();
       this.setIsCollaborating(false);
       appJotaiStore.set(collabAPIAtom, null);
     }
@@ -610,11 +612,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   });
 
   saveCollabRoom = (syncableElements: readonly SyncableExcalidrawElement[]) => {
-    // While an offline recovery is pending, the canvas holds state the
-    // server hasn't seen merged yet — pushing it now would overwrite the
+    // While local work is pending, the canvas holds state the server
+    // hasn't seen merged yet — pushing it now would overwrite the
     // good snapshot with a partial one. The merged scene saves itself once
-    // recovery paints (plus the empty-overwrite guards still apply).
-    if (this.offlineRecoveryPending || !this.portal.socketInitialized) {
+    // merged (plus the empty-overwrite guards still apply).
+    if (this.localWorkPending || !this.portal.socketInitialized) {
       return;
     }
     syncableElements = cloneJSON(syncableElements);
@@ -625,7 +627,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       onConflict: (latest, baseline) => {
         if (
           !this.isPortalCurrent(socket, roomId, roomKey) ||
-          this.offlineRecoveryPending
+          this.localWorkPending
         ) {
           return;
         }
@@ -665,7 +667,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   stopCollaboration = (keepRemoteState = true) => {
-    // Leaving abandons any pending offline recovery for the old room.
+    // Leaving abandons any pending local-work merge for the old room.
     // Persist the old room's last strokes before tearing down, so a quick
     // room switch doesn't drop them from its draft.
     this.saveRoomDraftThrottled.flush();
@@ -681,7 +683,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         this.excalidrawAPI.getSceneElementsIncludingDeleted(),
       ),
     );
-    this.clearOfflinePending();
+    this.clearLocalWorkPending();
 
     if (this.portal.socket && this.fallbackInitializationHandler) {
       this.portal.socket.off(
@@ -868,7 +870,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.portal.roomId = roomId;
     this.portal.roomKey = roomKey;
     this.setActiveRoomLink(window.location.href);
-    if (existingRoomLinkData && !this.offlineRecoveryPending) {
+    if (existingRoomLinkData && !this.localWorkPending) {
       this.resetRoomScene();
     }
     const cachedPreview = existingRoomLinkData
@@ -903,7 +905,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     generation: number,
     scenePromise: NonNullable<Collab["pendingScenePromise"]>,
   ) => {
-    if (this.offlineRecoveryPending) {
+    if (this.localWorkPending) {
       return;
     }
     const cacheKey = JSON.stringify([room.roomId, room.roomKey]);
@@ -918,7 +920,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     ) {
       this.preparedRoomScenes.delete(cacheKey);
       this.preparedRoomScenes.set(cacheKey, prepared);
-      this.cachedRoomBaseline = prepared.baseline;
+      this.localWorkBaseline = prepared.baseline;
       restored = prepared.elements;
       viewport = prepared.viewport;
       if (
@@ -940,7 +942,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       ) {
         return;
       }
-      this.cachedRoomBaseline = cached?.elements ?? null;
+      this.localWorkBaseline = cached?.elements ?? null;
       restored = reconcileElements(
         mergeLocalWork(
           local ?? [],
@@ -967,7 +969,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (this.roomStartGeneration !== generation) {
       return;
     }
-    this.offlineRecoveryPending = true;
+    this.localWorkPending = true;
     appJotaiStore.set(roomValidationPendingAtom, true);
     this.setLastBroadcastedOrReceivedSceneVersion(getSceneVersion(restored));
     this.excalidrawAPI.updateScene({
@@ -1005,7 +1007,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (
       !roomId ||
       !roomKey ||
-      (!this.offlineRecoveryPending && !this.portal.socketInitialized)
+      (!this.localWorkPending && !this.portal.socketInitialized)
     ) {
       return;
     }
@@ -1270,8 +1272,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
                   this.setLastBroadcastedOrReceivedSceneVersion(
                     getSceneVersion(savedElements),
                   );
-                  await this.paintOfflineRecovery(savedElements);
-                  this.clearOfflinePending();
+                  await this.mergeLocalWorkIntoServerScene(savedElements);
+                  this.clearLocalWorkPending();
                   scenePromise.resolve({
                     elements: savedElements,
                     scrollToContent: true,
@@ -1478,7 +1480,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           return null;
         }
       }
-      if (!cachedPreview && !wasInitialized && !this.offlineRecoveryPending) {
+      if (!cachedPreview && !wasInitialized && !this.localWorkPending) {
         const [cached, local] = await Promise.all([
           readCachedRoomScene(roomLinkData.roomId, roomLinkData.roomKey),
           readLocalRoomScene(roomLinkData.roomId, roomLinkData.roomKey),
@@ -1487,7 +1489,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           return null;
         }
         if (cached || local?.length) {
-          this.cachedRoomBaseline = cached?.elements ?? null;
+          this.localWorkBaseline = cached?.elements ?? null;
           const preview = reconcileElements(
             mergeLocalWork(
               local ?? [],
@@ -1497,7 +1499,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
             this.excalidrawAPI.getSceneElementsIncludingDeleted() as readonly RemoteExcalidrawElement[],
             this.excalidrawAPI.getAppState(),
           );
-          this.offlineRecoveryPending = true;
+          this.localWorkPending = true;
           appJotaiStore.set(roomValidationPendingAtom, true);
           this.setLastBroadcastedOrReceivedSceneVersion(
             getSceneVersion(preview),
@@ -1522,12 +1524,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         return null;
       }
       // Unsynced local work (draft or legacy backup) is already on the canvas
-      // as the preview, with offlineRecoveryPending set; paintOfflineRecovery
+      // as the preview, with localWorkPending set; mergeLocalWorkIntoServerScene
       // merges it over the server scene below.
       this.portal.socketInitialized = true;
       if (elements) {
         let merged = elements as readonly SyncableExcalidrawElement[];
-        if (!wasInitialized && !this.offlineRecoveryPending) {
+        if (!wasInitialized && !this.localWorkPending) {
           merged = getSyncableElements(
             reconcileElements(
               restoreElements(merged, null, { repairBindings: true }),
@@ -1541,14 +1543,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         // the room as if it were a local edit (same reason _reconcileElements
         // sets the version before updating).
         this.setLastBroadcastedOrReceivedSceneVersion(getSceneVersion(merged));
-        // Offline recovery reads the canvas below, so the wipe must wait:
-        // reset only the clean (non-recovery) path. Recovery paints the
-        // merged scene itself via paintOfflineRecovery. The clean path
+        // The local-work merge reads the canvas below, so the wipe must wait:
+        // reset only when no local work is pending; the merge paints the
+        // result itself via mergeLocalWorkIntoServerScene. The clean path
         // paints directly too (not just via the return value) so late
         // retries after boot — which ignore the return — still reach the
         // canvas; on boot the initialData application of the same content
         // is a harmless second paint.
-        if (!this.offlineRecoveryPending) {
+        if (!this.localWorkPending) {
           this.resetRoomScene();
           const restored = restoreElements(merged, null, {
             repairBindings: true,
@@ -1559,18 +1561,18 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           });
         }
         const recoveredChanges =
-          this.offlineRecoveryPending &&
-          (!this.cachedRoomBaseline ||
+          this.localWorkPending &&
+          (!this.localWorkBaseline ||
             getRoomChanges(
-              this.cachedRoomBaseline,
+              this.localWorkBaseline,
               getSyncableElements(this.getSceneElementsIncludingDeleted()),
             ).length > 0);
-        await this.paintOfflineRecovery(merged);
+        await this.mergeLocalWorkIntoServerScene(merged);
         merged = getSyncableElements(
           this.excalidrawAPI.getSceneElementsIncludingDeleted(),
         );
         this.loadImageFiles();
-        this.clearOfflinePending();
+        this.clearLocalWorkPending();
         if (recoveredChanges) {
           this.portal.broadcastScene(WS_SUBTYPES.UPDATE, merged, true);
         }
@@ -1585,15 +1587,15 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // canvas that would read as "room is empty". Local work (already on
       // the canvas as the preview) keeps accumulating, persisted as the room
       // draft, and merges on recovery.
-      if (this.cachedRoomBaseline || !this.portal.socket.connected) {
+      if (this.localWorkBaseline || !this.portal.socket.connected) {
         this.enterOfflineRoomMode(roomLinkData);
         return null;
       }
       // Connected but no snapshot: a genuinely empty room — unless local
       // work is pending (draft preview or offline strokes). Never wipe
       // those: keep them and push to the server instead.
-      if (this.offlineRecoveryPending) {
-        this.clearOfflinePending();
+      if (this.localWorkPending) {
+        this.clearLocalWorkPending();
         this.queueSaveRoom();
         return null;
       }
@@ -1612,30 +1614,30 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     roomId: string;
     roomKey: string;
   }) {
-    this.offlineRecoveryPending = true;
+    this.localWorkPending = true;
     appJotaiStore.set(roomValidationPendingAtom, false);
     appJotaiStore.set(offlineRoomPendingAtom, { ...roomLinkData });
   }
 
-  private clearOfflinePending() {
-    this.offlineRecoveryPending = false;
-    this.cachedRoomBaseline = null;
+  private clearLocalWorkPending() {
+    this.localWorkPending = false;
+    this.localWorkBaseline = null;
     appJotaiStore.set(roomValidationPendingAtom, false);
     appJotaiStore.set(offlineRoomPendingAtom, null);
   }
 
-  // A late-arriving scene after the initial promise already resolved (empty)
-  // must still reach the canvas: resolve() would be a noop. Merges with
-  // whatever was drawn offline and paints directly. No-op unless an offline
-  // recovery is actually pending.
-  private async paintOfflineRecovery(
+  // Merges pending local work (changes against localWorkBaseline, or the
+  // whole canvas without one) over a server scene and paints the result
+  // directly, so a scene arriving after the initial promise resolved still
+  // reaches the canvas. No-op unless local work is pending.
+  private async mergeLocalWorkIntoServerScene(
     elements: readonly SyncableExcalidrawElement[],
   ): Promise<void> {
-    if (!this.offlineRecoveryPending) {
+    if (!this.localWorkPending) {
       return;
     }
-    const baseline = this.cachedRoomBaseline;
-    this.clearOfflinePending();
+    const baseline = this.localWorkBaseline;
+    this.clearLocalWorkPending();
     // Syncable and Remote share structure; only the brand differs, and the
     // reconciler immediately restores + rebrands anyway.
     const merged = baseline
