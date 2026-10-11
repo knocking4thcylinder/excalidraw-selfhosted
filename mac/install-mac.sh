@@ -17,12 +17,9 @@ FQDN_DEFAULT="steamdeck.example.ts.net"
 read -rp "Deck MagicDNS name [$FQDN_DEFAULT]: " FQDN
 FQDN="${FQDN:-$FQDN_DEFAULT}"
 
-if ! grep -q "$FQDN" /etc/hosts; then
+if ! grep -qwF "$FQDN" /etc/hosts; then
   # discover the Deck's tailnet IP via tailscale on this Mac (works even without sudo)
-  TIP=$(tailscale status --json 2>/dev/null | sed -n 's/.*"100\.\([0-9.]*\)[^0-9]*"$//' \
-      -e 's/.*"'"$FQDN"'".*//p' 2>/dev/null || true)
-  # simpler: find any ip that tailscale reports for hostname
-  TIP=$(tailscale status 2>/dev/null | awk -v n="${FQDN%%.*}" '$2 ~ n && $1 ~ /^100\./ {print $1; exit}')
+  TIP=$(tailscale status 2>/dev/null | awk -v n="${FQDN%%.*}" '$2 == n && $1 ~ /^100\./ {print $1; exit}')
   [ -z "$TIP" ] && read -rp "Tailscale IP for $FQDN: " TIP
   [ -z "$TIP" ] && { echo "no IP, skipping hosts entry"; exit 0; }
   echo "$TIP $FQDN" | tee -a /etc/hosts
