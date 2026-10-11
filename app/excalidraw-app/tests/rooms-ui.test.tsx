@@ -115,6 +115,14 @@ const mountRooms = (props: Partial<Parameters<typeof RoomsPage>[0]> = {}) => {
   };
 };
 
+// "New folder" stays disabled until the registry has loaded; clicking it
+// earlier is a no-op, which made these tests flaky under load.
+const clickNewFolder = async () => {
+  const button = await screen.findByRole("button", { name: "New folder" });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+};
+
 const openRoomMenu = async (name: string) => {
   fireEvent.keyDown(
     await screen.findByRole("button", { name: `More actions for ${name}` }),
@@ -407,9 +415,7 @@ describe("rooms UI", () => {
     "cancels an empty inline folder draft on %s",
     async (action) => {
       mountRooms();
-      fireEvent.click(
-        await screen.findByRole("button", { name: "New folder" }),
-      );
+      await clickNewFolder();
       const input = screen.getByRole("textbox", { name: "Folder name" });
       expect(input).toHaveFocus();
       expect(input.closest('[role="treeitem"]')).toHaveAttribute(
@@ -443,7 +449,7 @@ describe("rooms UI", () => {
       name: "School",
     });
     mountRooms();
-    fireEvent.click(await screen.findByRole("button", { name: "New folder" }));
+    await clickNewFolder();
     const input = screen.getByRole("textbox", { name: "Folder name" });
     fireEvent.change(input, { target: { value: "School" } });
     fireEvent.blur(input);
@@ -855,7 +861,7 @@ describe("rooms UI", () => {
       name: "School",
     });
     const { unmount } = mountRooms();
-    fireEvent.click(await screen.findByRole("button", { name: "New folder" }));
+    await clickNewFolder();
     const name = screen.getByRole("textbox", { name: "Folder name" });
     expect(name).toHaveFocus();
     fireEvent.change(name, { target: { value: " School " } });
@@ -973,7 +979,7 @@ describe("rooms UI", () => {
   it("shows failed folder saves without losing the input", async () => {
     vi.mocked(saveRoomFolder).mockResolvedValue(null);
     mountRooms();
-    fireEvent.click(await screen.findByRole("button", { name: "New folder" }));
+    await clickNewFolder();
     fireEvent.change(screen.getByRole("textbox", { name: "Folder name" }), {
       target: { value: "School" },
     });
