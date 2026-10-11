@@ -100,13 +100,14 @@ TUN-mode app (Happ, Xray, …) takes over `100.64.0.0/10` or DNS.
 <summary><b>Android tablet</b>: build and install the fullscreen wrapper</summary>
 
 ```bash
-cd android && ./build.sh
+cd android && APP_HOST=<deck-magicdns-name> ./build.sh
 adb install -r build/Excalidraw.apk
 ```
 
 `build.sh` needs no Gradle and runs on macOS or Linux. On its first run it downloads Google's
 `cmdline-tools`, then compiles with `aapt2`/`javac`/`d8` and signs the APK with
-a locally generated keystore. The APK supports minSdk 21, so HarmonyOS 2.0
+a locally generated keystore. The app is pinned to the `APP_HOST` origin, which
+is remembered for later builds. The APK supports minSdk 21, so HarmonyOS 2.0
 works. It's a domain-pinned WebView that keeps the screen on, opens room links,
 and saves exports to `Downloads/`.
 

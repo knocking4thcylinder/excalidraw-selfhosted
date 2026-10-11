@@ -3,6 +3,8 @@ fork.bundle
 # retired Node backend copy; delete after the Elixir cutover
 shortcode-server.js
 shortcode-data/
+recovery/
+*.sqlite3
 Caddyfile
 certs/
 reinstall.sh

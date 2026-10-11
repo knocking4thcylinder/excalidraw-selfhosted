@@ -21,7 +21,7 @@ import java.security.SecureRandom;
 
 public class MainActivity extends Activity {
     private static final String APP_SCHEME = "https";
-    private static final String APP_HOST = "steamdeck.example.ts.net";
+    private static final String APP_HOST = "@APP_HOST@"; // filled in by build.sh
     private static final int APP_PORT = 8443;
     private static final String BASE_URL = APP_SCHEME + "://" + APP_HOST + ":" + APP_PORT;
 

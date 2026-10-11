@@ -13,9 +13,9 @@ launchctl enable system/user.fixtsroutes 2>/dev/null || true
 launchctl kickstart system/user.fixtsroutes 2>/dev/null || true
 
 # 2. hosts entry for the current Deck name (edit/remove if FQDN changes)
-FQDN_DEFAULT="steamdeck.example.ts.net"
-read -rp "Deck MagicDNS name [$FQDN_DEFAULT]: " FQDN
-FQDN="${FQDN:-$FQDN_DEFAULT}"
+FQDN=${FQDN:-}
+[ -n "$FQDN" ] || read -rp "Deck MagicDNS name (e.g. steamdeck.example.ts.net): " FQDN
+[ -n "$FQDN" ] || { echo "no Deck name, skipping hosts entry"; exit 0; }
 
 if ! grep -qwF "$FQDN" /etc/hosts; then
   # discover the Deck's tailnet IP via tailscale on this Mac (works even without sudo)

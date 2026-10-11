@@ -11,8 +11,8 @@ Commit under `app/` (or packaging), push `master`, then on the Deck:
 cd ~/excalidraw && ./deploy.sh   # git pull (when a checkout) + rebuild + swap + HTTPS checks
 ```
 
-No bundles: the Deck updates via `git pull` (needs one read credential for
-this private repo), falling back to files synced from the Mac.
+No bundles: the Deck updates via `git pull`, falling back to files synced
+from the Mac.
 
 For smaller updates, deploy only the affected component:
 
@@ -81,7 +81,7 @@ not run on every boot. In a synced directory without `.git`, it builds local fil
 ./deploy.sh logs    # recent logs for all four services
 ```
 
-Always use `https://steamdeck.example.ts.net:8443` on the tablet with
+Always use `https://<deck>.<tailnet>.ts.net:8443` on the tablet with
 Tailscale connected. Port 443 may serve another application. If the app works
 locally but the tablet cannot connect, check the HTTPS proxy with `status`;
 `start` repairs missing systemd units, including the Caddy unit, so the stack

@@ -171,7 +171,7 @@ Build the opt-in frontend using the same HTTPS origin as the fixture:
 ```bash
 cd app/excalidraw-app
 VITE_APP_LOADING_BENCHMARK=true \
-VITE_APP_WS_SERVER_URL=https://steamdeck.example.ts.net:5173 \
+VITE_APP_WS_SERVER_URL=https://<deck>.<tailnet>.ts.net:5173 \
 VITE_APP_DISABLE_SENTRY=true \
 ../node_modules/.bin/vite build \
   --outDir ../../.build-cache/loading-benchmark/build --emptyOutDir
@@ -181,7 +181,7 @@ node app/scripts/loading-benchmark.cjs
 
 The runner prints the URL, synthetic room key, temporary data directory, fixture
 sizes, and its own two container names. Defaults use ports 5173/3006/3007;
-startup checks that they are free. Override `BENCH_HOST`, `BENCH_PORT`,
+startup checks that they are free. `BENCH_HOST` defaults to this machine's MagicDNS name. Override `BENCH_HOST`, `BENCH_PORT`,
 `BENCH_API_PORT`, `BENCH_SOCKET_PORT`, `BENCH_CERT`, `BENCH_KEY`,
 `BENCH_API_IMAGE`, `BENCH_BUILD_DIR`, or `BENCH_DATA_DIR` as needed. Keep the
 frontend socket URL aligned with these settings. Build/data directories should be

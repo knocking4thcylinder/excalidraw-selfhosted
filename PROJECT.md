@@ -13,13 +13,13 @@ Android tablet (APK wrapper, stylus)
         │ per-app VPN (Tailscale App Connections)
         ▼
 MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
-                                               ├─ Caddy :8443 (TLS, domain steamdeck.example.ts.net)
+                                               ├─ Caddy :8443 (TLS, domain <deck>.<tailnet>.ts.net)
                                                ├─ excalidraw app (nginx :3000)
                                                ├─ excalidraw-room (socket.io :3002)
                                                └─ rooms/short-code API (Elixir :3003)
 ```
 
-- **URL:** `https://steamdeck.example.ts.net:8443`
+- **URL:** `https://<deck>.<tailnet>.ts.net:8443`
 - **Join a room:** full link *or* a short code like `7QU6-38SK` (server-side map,
   codes persisted in `~/excalidraw/shortcode-data/whiteboard.sqlite3` — the
   database also keeps room keys; so does the room registry, which lists them to
@@ -35,15 +35,15 @@ MacBook ── route-fixer daemon + /etc/hosts ──► Steam Deck
   devices. Note: rooms created
   before this feature appear in the list once anyone joins them again.
 
-## The repo (monorepo, private: github.com/knocking4thcylinder/excalidraw-selfhosted, branch `master`)
+## The repo (monorepo: github.com/knocking4thcylinder/excalidraw-selfhosted, branch `master`)
 
 `~/excalidraw` on the Deck IS this repo's checkout. The former
 `excalidraw-selfhosted-fork` was merged in as `app/` via `git subtree add`
 (full history preserved, incl. the Firestore-load fix `891781cd`); its old
 remote is frozen. Upstream pulls: `git subtree pull --prefix=app
 https://github.com/excalidraw/excalidraw.git <tag> --squash`. No bundles:
-the Deck updates with `git pull` before `deploy.sh` (needs one
-read credential for this private repo; otherwise sync files from the Mac).
+the Deck updates with `git pull` before `deploy.sh` (or with files synced
+from the Mac).
 
 1. **Packaging** (repo root):
    - `install.sh` — canonical Deck installer. Idempotent. Handles:
@@ -66,7 +66,7 @@ read credential for this private repo; otherwise sync files from the Mac).
      `/32` host route through the current Tailscale utun interface for every
      peer in `tailscale status`. Needed because proxy/TUN apps on the Mac
      (Happ/Xray TUN mode) hijack `100.64/10` and DNS; also adds a hosts entry
-     `steamdeck.example.ts.net → 100.64.0.10`.
+     `<deck>.<tailnet>.ts.net → <deck-tailnet-ip>`.
    - `backend/` — Elixir/SQLite HTTP service (replaced the original Node
      `shortcode/server.js`, which wrote `rooms.json`/`scenes.json`): `POST /api/code {url}` mints a
      code; `GET /api/resolve/<code>` returns the full room URL as JSON (used by
@@ -93,7 +93,7 @@ read credential for this private repo; otherwise sync files from the Mac).
      The APK is a **fullscreen WebView wrapper** (domain-pinned) with:
      `addJavascriptInterface` `AndroidBlobSaver` (writes `blob:` exports to
      MediaStore `Downloads/`, base64 → file, since DownloadManager can't
-     handle `blob:`), VIEW-intent filter for `steamdeck.example.ts.net`
+     handle `blob:`), VIEW-intent filter for `<deck>.<tailnet>.ts.net`
      room links, keep-screen-on, no cleartext traffic.
 
 2. **`app/`** — ex-`excalidraw/excalidraw` snapshot (former fork repo,
@@ -116,19 +116,15 @@ read credential for this private repo; otherwise sync files from the Mac).
    - The app image (tagged `excalidraw-selfhost`) builds via
      `sudo podman build -t excalidraw-selfhost .` from this source.
 
-## The machines (as of last verification, all contiguous)
+## The machines
 
-- **MacBook** (`macbook`, `100.64.0.11`)
-  - route-fixer daemon loaded as `user.fixtsroutes`
-  - `/etc/hosts` entry `steamdeck.example.ts.net → 100.64.0.10`
-  - `~/src/excalidraw-deck/` ← the packaging repo on disk
-- **Steam Deck** (`steamdeck`, `100.64.0.10`) — runs the live stack; has
-  passwordless `sudo podman` via `/etc/sudoers.d/deck-podman` (they ran the
-  chmod). `/home/excalidraw/install.sh` matches the repo (md5 equal).
-- **Android tablet** (`tablet`, `100.64.0.12`) — Excalidraw APK v1.4
-  installed (package `com.k4c.excalidraw`, UJA10 146), **wireless adb** over
-  its tailnet IP `100.64.0.12:5555` (USB-cable re-plug + `adb tcpip 5555`
-  needed once if the daemon resets).
+- **MacBook**: route-fixer daemon loaded as `user.fixtsroutes`, plus an
+  `/etc/hosts` entry mapping the Deck's MagicDNS name to its tailnet IP.
+- **Steam Deck**: runs the live stack. Passwordless `sudo podman` comes from a
+  sudoers drop-in (`<user> ALL=(root) NOPASSWD: /usr/bin/podman`).
+- **Android tablet**: the Excalidraw APK (package `com.k4c.excalidraw`), with
+  **wireless adb** over its tailnet IP on port 5555 (USB re-plug +
+  `adb tcpip 5555` needed once if the daemon resets).
 
 ## Reproduction / redeploy one-liners
 
@@ -137,8 +133,8 @@ read credential for this private repo; otherwise sync files from the Mac).
 | Deck (first ever run) | `sudo steamos-readonly disable` then `bash ~/excalidraw/install.sh` |
 | Deck (after fork/image change) | `bash ~/excalidraw/deploy.sh` |
 | Post-OS-update wipe on Deck | `bash ~/excalidraw/reinstall.sh` (just calls install.sh) |
-| Mac network fixes | `sudo bash ~/src/excalidraw-deck/mac/install-mac.sh` |
-| Android APK build + install | `cd android && ./build.sh && adb install -r build/Excalidraw.apk` |
+| Mac network fixes | `sudo ./mac/install-mac.sh` |
+| Android APK build + install | `cd android && APP_HOST=<deck>.<tailnet>.ts.net ./build.sh && adb install -r build/Excalidraw.apk` |
 
 ## Known trade-offs / gotchas worth inches if extending
 

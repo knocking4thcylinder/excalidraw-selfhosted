@@ -1,6 +1,7 @@
 #!/bin/bash
 # Reproducible APK builder (no gradle). Uses Android SDK cmdline-tools.
-# Usage: ./build.sh   → build/Excalidraw.apk (signed)
+# Usage: APP_HOST=<deck>.<tailnet>.ts.net ./build.sh   → build/Excalidraw.apk (signed)
+#   APP_HOST is remembered in .app-host, so later builds can omit it.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
@@ -9,6 +10,13 @@ SDK_PREFIX=34              # build-tools/platform version
 SDK_ROOT="$HERE/sdk"
 BT="$SDK_ROOT/build-tools/35.0.0"
 PLAT="$SDK_ROOT/platforms/android-34"
+
+APP_HOST=${APP_HOST:-$(cat "$HERE/.app-host" 2>/dev/null || true)}
+[[ "$APP_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || {
+  echo "set APP_HOST to the Deck's MagicDNS name, e.g. APP_HOST=steamdeck.example.ts.net ./build.sh" >&2
+  exit 1
+}
+echo "$APP_HOST" > "$HERE/.app-host"
 
 # --- fetch Android SDK pieces if missing ---
 if [ ! -x "$BT/aapt2" ]; then
@@ -41,15 +49,20 @@ APP="$HERE/app"
 OUT="$HERE/build"
 mkdir -p "$OUT"
 
-echo "== compile =="
+echo "== compile for $APP_HOST =="
+# the app is pinned to one origin; stamp it into the manifest and MainActivity
+GEN="$OUT/gen"
+mkdir -p "$GEN"
+sed "s/@APP_HOST@/$APP_HOST/g" "$APP/src/main/AndroidManifest.xml" > "$GEN/AndroidManifest.xml"
+sed "s/@APP_HOST@/$APP_HOST/g" "$APP/src/main/java/com/k4c/excalidraw/MainActivity.java" > "$GEN/MainActivity.java"
 "$BT/aapt2" compile --dir "$APP/src/main/res" -o "$OUT/res.zip"
 "$BT/aapt2" link -o "$OUT/base.apk" \
   --min-sdk-version 21 --target-sdk-version 34 \
-  --manifest "$APP/src/main/AndroidManifest.xml" \
+  --manifest "$GEN/AndroidManifest.xml" \
   -I "$PLAT/android.jar" "$OUT/res.zip" --java "$OUT/src"
 javac --release 8 -classpath "$PLAT/android.jar" \
   "$OUT/src/com/k4c/excalidraw/R.java" \
-  "$APP/src/main/java/com/k4c/excalidraw/MainActivity.java" \
+  "$GEN/MainActivity.java" \
   "$APP/src/main/java/com/k4c/excalidraw/BlobSaver.java" \
   -d "$OUT/classes"
 mkdir -p "$OUT/dex"

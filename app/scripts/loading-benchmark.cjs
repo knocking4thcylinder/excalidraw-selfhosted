@@ -28,7 +28,11 @@ const directory =
 const port = Number(process.env.BENCH_PORT || 5173);
 const apiPort = Number(process.env.BENCH_API_PORT || 3006);
 const socketPort = Number(process.env.BENCH_SOCKET_PORT || 3007);
-const hostname = process.env.BENCH_HOST || "steamdeck.example.ts.net";
+const hostname =
+  process.env.BENCH_HOST ||
+  JSON.parse(
+    execFileSync("tailscale", ["status", "--json"]),
+  ).Self.DNSName.replace(/\.$/, "");
 const image = process.env.BENCH_API_IMAGE || "excalidraw-api-elixir-sync-test";
 const containers = [
   `whiteboard-benchmark-api-${process.pid}`,
