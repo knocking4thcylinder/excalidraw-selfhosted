@@ -166,7 +166,7 @@ test("direct redeploy discovers and exports hostname for app-only mode", (contex
   const setup = fixture(context);
   const result = setup.run(["app", "--local"], { FQDN: "" }, "redeploy.sh");
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(setup.commands().some((command) => command.includes("FQDN_HOST=test.example")));
+  assert.ok(setup.commands().some((command) => command[0] === "curl" && command.includes("https://test.example:8443/")));
 });
 
 test("low build storage fails before image build or service swap", (context) => {
@@ -306,6 +306,39 @@ test("runtime image uses the same pinned nginx base as the multi-stage build", (
   const nginxBase = dockerfile.split("\n").find((line) => line.startsWith("FROM nginx:"));
   assert.ok(runtime.startsWith(nginxBase));
   assert.ok(runtime.includes("COPY build/ /usr/share/nginx/html"));
+  assert.ok(runtime.includes("COPY nginx.conf /etc/nginx/conf.d/default.conf"));
+  assert.ok(dockerfile.includes("COPY excalidraw-app/nginx.conf /etc/nginx/conf.d/default.conf"));
+});
+
+test("app container is created from the image as-is, without runtime patching", (context) => {
+  const setup = fixture(context);
+  assert.equal(setup.run(["app", "--local"]).status, 0);
+  const created = setup.commands().find((command) => command[0] === "podman" && command[1] === "create" && command.includes("excalidraw"));
+  assert.equal(created.at(-1), "excalidraw-selfhost");
+  assert.ok(!setup.commands().some((command) => command.some((argument) => argument.includes("oss-collab"))));
+});
+
+test("failed app health check restores the previous app container", (context) => {
+  const setup = fixture(context);
+  const result = setup.run(["app", "--local"], { MOCK_FAIL_CHECK: "1" });
+  assert.notEqual(result.status, 0);
+  const renames = setup.commands().filter((command) => command[0] === "podman" && command[1] === "rename");
+  assert.deepEqual(renames.map((command) => command.slice(2)), [
+    ["excalidraw", renames[0][3]],
+    [renames[0][3], "excalidraw"],
+  ]);
+  assert.ok(renames[0][3].startsWith("excalidraw-previous-"));
+});
+
+test("successful backend deploys keep only the newest data backups", (context) => {
+  const setup = fixture(context);
+  for (let index = 0; index < 4; index += 1) {
+    mkdirSync(path.join(setup.directory, `recovery/backend-2020010${index}-000000-1`), { recursive: true });
+  }
+  mkdirSync(path.join(setup.directory, "recovery/manual-snapshot"));
+  assert.equal(setup.run(["backend", "--local"], { BACKEND_BACKUPS_KEPT: "2" }).status, 0);
+  const removed = setup.commands().filter((command) => command[0] === "rm" && command[1] === "-rf").map((command) => path.basename(command.at(-1)));
+  assert.deepEqual(removed.sort(), ["backend-20200100-000000-1", "backend-20200101-000000-1", "backend-20200102-000000-1"]);
 });
 
 test("Elixir backend builds before stopping and backs up data", (context) => {

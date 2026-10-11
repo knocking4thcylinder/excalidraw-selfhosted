@@ -55,7 +55,8 @@ sudo podman build --layers -t "$BACKEND_IMAGE" "$BASE/backend"
 # 1. tailscale cert (as deck user, userspace daemon)
 cd "$BASE/certs"
 tailscale cert "$FQDN"
-chmod a+r "$FQDN".crt "$FQDN".key
+chmod 644 "$FQDN".crt
+chmod 600 "$FQDN".key  # Caddy runs as root under rootful podman
 
 # 2. caddyfile
 cd "$BASE"
@@ -68,16 +69,7 @@ sudo podman rm -f excalidraw excalidraw-room excalidraw-caddy 2>/dev/null || tru
 sudo podman run -d --name excalidraw-room --restart always --network host \
   -e PORT=3002 docker.io/excalidraw/excalidraw-room:latest
 
-sudo podman run -d --name excalidraw --restart always --network host \
-  -e FQDN_HOST="$FQDN" \
-  "$IMAGE" \
-  sh -c 'find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\1/" {} + && \
-    find /usr/share/nginx/html/assets -name "*.js" -exec \
-      sed -i -e "s|https://oss-collab\.excalidraw\.com|wss://$FQDN_HOST:8443|g" \
-             -e "s|wss://oss-collab\.excalidraw\.com|wss://$FQDN_HOST:8443|g" {} + && \
-    R=$(grep -rlo "oss-collab" /usr/share/nginx/html/assets | wc -l) && \
-    [ "$R" = "0" ] && echo "PATCH_OK_WSS (0 residual oss-collab refs)" && \
-    nginx -g "daemon off;"'
+sudo podman run -d --name excalidraw --restart always --network host "$IMAGE"
 
 sudo podman run -d --name excalidraw-caddy --restart always --network host \
   -v "$BASE/Caddyfile:/etc/caddy/Caddyfile:ro" \

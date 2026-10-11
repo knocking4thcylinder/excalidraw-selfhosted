@@ -64,9 +64,15 @@ if [ "$MODE" != app ]; then
 fi
 
 PREVIOUS_BACKEND=
+PREVIOUS_APP=
 NEW_BACKEND_DATABASE=false
 restore_services() {
   echo "Deployment failed; attempting to restart existing services." >&2
+  if [ -n "$PREVIOUS_APP" ]; then
+    sudo systemctl stop excalidraw.service || true
+    sudo podman rm -f excalidraw || true
+    sudo podman rename "$PREVIOUS_APP" excalidraw || true
+  fi
   if [ -n "$PREVIOUS_BACKEND" ]; then
     sudo systemctl stop excalidraw-shortcode.service || true
     sudo podman rm -f excalidraw-shortcode || true
@@ -119,23 +125,24 @@ fi
 if [ "$MODE" != backend ]; then
   stage 'app container swap'
   sudo systemctl stop excalidraw.service
-  sudo podman rm -f excalidraw 2>/dev/null || true
-  sudo podman create --name excalidraw --restart always --network host \
-    -e FQDN_HOST="$FQDN" \
-    "$APP_IMAGE" \
-    sh -c 'CFG=/etc/nginx/conf.d/default.conf; grep -q excalidraw-cache-policy $CFG || { printf "%s\n" "    # excalidraw-cache-policy" "    location = /index.html {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"no-store\";" "    }" "    location /assets/ {" "        root /usr/share/nginx/html;" "        add_header Cache-Control \"public, max-age=31536000, immutable\";" "    }" > /tmp/cachepol.conf; sed -i -e "/server_name  localhost;/r /tmp/cachepol.conf" $CFG; }; nginx -t && \
-    find /etc/nginx -name "*.conf" -exec sed -i -E "s/listen[[:space:]]+80([^0-9])/listen 3000\\1/" {} + && \
-    find /usr/share/nginx/html/assets -name "*.js" -exec \
-      sed -i -e "s|https://oss-collab\\.excalidraw\\.com|wss://$FQDN_HOST:8443|g" \
-             -e "s|wss://oss-collab\\.excalidraw\\.com|wss://$FQDN_HOST:8443|g" {} + && \
-    R=$(grep -rlo "oss-collab" /usr/share/nginx/html/assets | wc -l) && \
-    [ "$R" = "0" ] && echo "PATCH_OK_WSS" && \
-    nginx -g "daemon off;"'
+  previous_app="excalidraw-previous-$$"
+  sudo podman rename excalidraw "$previous_app"
+  PREVIOUS_APP=$previous_app
+  # The image carries its own nginx config (app/excalidraw-app/nginx.conf) and
+  # connects to the room server on its own origin; nothing is patched here.
+  sudo podman create --name excalidraw --restart always --network host "$APP_IMAGE"
   sudo systemctl start excalidraw.service
 fi
 stage 'HTTPS checks'
 bash "$BASE/deploy.sh" check
 if [ "$MODE" != app ]; then printf '%s\n' "$SCENE_SYNC_ENABLED" > "$BASE/.scene-sync-enabled"; fi
+trap - ERR
 if [ -n "$PREVIOUS_BACKEND" ]; then sudo podman rm -f "$PREVIOUS_BACKEND" || true; fi
+if [ -n "$PREVIOUS_APP" ]; then sudo podman rm -f "$PREVIOUS_APP" || true; fi
+# Keep the newest backend data backups only; each one is a full database copy.
+if [ "$MODE" != app ] && [ -d "$BASE/recovery" ]; then
+  find "$BASE/recovery" -maxdepth 1 -name 'backend-*' -type d -print | sort | head -n -"${BACKEND_BACKUPS_KEPT:-10}" |
+    while IFS= read -r old_backup; do sudo rm -rf -- "$old_backup"; done
+fi
 printf 'TIMING: HTTPS checks: %ss\n' "$((SECONDS - STAGE_STARTED))"
 printf 'TIMING: total %s deploy: %ss\n' "$MODE" "$((SECONDS - STARTED))"
