@@ -192,8 +192,8 @@ codes and images.
 | [docs/loading-benchmark.md](docs/loading-benchmark.md) | Isolated loading and Android rendering benchmarks |
 | [PROJECT.md](PROJECT.md) | Full project history and handoff notes |
 
-## Credits
+## License
 
-Built on [Excalidraw](https://github.com/excalidraw/excalidraw) (MIT) and
-[excalidraw-room](https://github.com/excalidraw/excalidraw-room). The app source
-in `app/` keeps upstream's [MIT license](app/LICENSE).
+[MIT](LICENSE). Built on [Excalidraw](https://github.com/excalidraw/excalidraw)
+and [excalidraw-room](https://github.com/excalidraw/excalidraw-room); the app
+source in `app/` keeps upstream's [MIT license](app/LICENSE).
