@@ -15,13 +15,18 @@ if [ ! -x "$BT/aapt2" ]; then
   echo "== downloading Android cmdline-tools (one-time) =="
   mkdir -p "$SDK_ROOT/cmdline-tools"
   ZIP="$SDK_ROOT/cmdline-tools.zip"
-  curl -L -o "$ZIP" https://dl.google.com/android/repository/commandlinetools-mac-13114758_latest.zip
+  case "$(uname -s)" in
+    Darwin) TOOLS_OS=mac ;;
+    Linux)  TOOLS_OS=linux ;;
+    *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
+  esac
+  curl -fL -o "$ZIP" "https://dl.google.com/android/repository/commandlinetools-$TOOLS_OS-13114758_latest.zip"
   unzip -q -o "$ZIP" -d "$SDK_ROOT/cmdline-tools"
   rm "$ZIP"
   TOOLS="$SDK_ROOT/cmdline-tools/cmdline-tools"
-  yes | "$TOOLS/bin/sdkmanager" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+  { yes || true; } | "$TOOLS/bin/sdkmanager" --sdk_root="$SDK_ROOT" --licenses >/dev/null
   "$TOOLS/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platform-tools" \
-      "build-tools;34.0.0" "platforms;android-$SDK_PREFIX" >/dev/null 2>&1 || true
+      "build-tools;35.0.0" "platforms;android-$SDK_PREFIX" >/dev/null
 fi
 
 # --- signing key (generated once, kept local) ---
@@ -51,7 +56,7 @@ mkdir -p "$OUT/dex"
 cd "$OUT/classes" && zip -qr ../classes.jar . && cd "$HERE"
 # primary: d8; fallback: dx from build-tools 30.0.3 (d8 8.2.2-dev has an NPE bug on
 # classes carrying the NestHost attribute — dexer-level, not a code problem)
-if ! "$BT/d8" --min-api 21 "$OUT/classes.jar" --output "$OUT/dex" >/dev/null 2>>/tmp/d8err.log; then
+if ! "$BT/d8" --min-api 21 --lib "$PLAT/android.jar" "$OUT/classes.jar" --output "$OUT/dex" >/dev/null 2>>/tmp/d8err.log; then
   echo "== d8 failed (see /tmp/d8err.log), falling back to dx =="
   if [ ! -x "$SDK_ROOT/build-tools/30.0.3/dx" ]; then
     "$SDK_ROOT/cmdline-tools/cmdline-tools/bin/sdkmanager" --sdk_root="$SDK_ROOT" "build-tools;30.0.3" >/dev/null 2>&1
