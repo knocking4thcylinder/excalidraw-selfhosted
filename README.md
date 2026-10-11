@@ -39,35 +39,15 @@ Draw with a stylus on an Android tablet and watch it appear live on a laptop. Ev
 
 ## How it works
 
-```mermaid
-flowchart LR
-  tablet["Android tablet"]
-  mac["MacBook"]
-  browser["Any browser"]
+Every device on your tailnet talks to one HTTPS port on the Deck. Caddy routes
+each request by path to one of three services:
 
-  subgraph deck ["Steam Deck"]
-    caddy["<b>Caddy</b> :8443<br/>Tailscale TLS cert"]
-    app["<b>App</b> :3000<br/>Excalidraw + nginx"]
-    room["<b>Room</b> :3002<br/>Socket.IO relay"]
-    api["<b>API</b> :3003<br/>Elixir"]
-    db[("SQLite")]
-    caddy -- "/" --> app
-    caddy -- "/socket.io" --> room
-    caddy -- "/api" --> api
-    api --> db
-  end
-
-  tablet --> caddy
-  mac -- "HTTPS + WSS<br/>over Tailscale" --> caddy
-  browser --> caddy
-```
-
-| Component | What it does |
-| --- | --- |
-| **Caddy** | Terminates TLS with a certificate from `tailscale cert` and routes each path to a service |
-| **App** | The Excalidraw fork in [`app/`](app/), built into an nginx image with a PWA shell for offline use |
-| **Room** | The upstream `excalidraw-room` relay, which carries live edits between clients over one WebSocket each |
-| **API** | The Elixir service in [`backend/`](backend/) that stores short codes, the room registry, folders, encrypted snapshots, and images |
+| Component | Route | What it does |
+| --- | --- | --- |
+| **Caddy** `:8443` | all traffic | Terminates TLS with a certificate from `tailscale cert` |
+| **App** `:3000` | `/` | The Excalidraw fork in [`app/`](app/), built into an nginx image with a PWA shell for offline use |
+| **Room** `:3002` | `/socket.io/*` | The upstream `excalidraw-room` relay, which carries live edits between clients over one WebSocket each |
+| **API** `:3003` | `/api/*`, `/s/*` | The Elixir service in [`backend/`](backend/) that stores short codes, the room registry, folders, encrypted snapshots, and images in SQLite |
 
 Every component is a container supervised by its own systemd unit, under a
 coordinating `excalidraw-stack` service, so the stack comes back after a
