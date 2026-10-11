@@ -18,10 +18,18 @@ defmodule Whiteboard.Scenes do
 
   def etag(scene) do
     case List.last(Map.get(scene, "patches", [])) do
-      nil -> fingerprint(scene["iv"] <> scene["ciphertext"])
+      nil -> checkpoint_etag(scene)
       patch -> patch["etag"]
     end
   end
+
+  # Stored on write so reads don't re-hash up to 5 MiB of ciphertext;
+  # records written before it existed fall back to hashing.
+  def checkpoint_etag(scene),
+    do: scene["checkpointEtag"] || fingerprint(scene["iv"] <> scene["ciphertext"])
+
+  defp with_checkpoint_etag(scene),
+    do: Map.put(scene, "checkpointEtag", fingerprint(scene["iv"] <> scene["ciphertext"]))
 
   def fingerprint(value) do
     "\"" <> Base.encode16(:crypto.hash(:sha256, value), case: :lower) <> "\""
@@ -52,7 +60,7 @@ defmodule Whiteboard.Scenes do
       scene
       |> Map.take(["iv", "ciphertext", "version", "updatedAt"])
       |> Map.put("syncVersion", 1)
-      |> Map.put("checkpointEtag", fingerprint(scene["iv"] <> scene["ciphertext"]))
+      |> Map.put("checkpointEtag", checkpoint_etag(scene))
       |> Map.put("patches", patches)
     end
   end
@@ -74,7 +82,10 @@ defmodule Whiteboard.Scenes do
     Store.put(
       "scenes",
       id,
-      scene |> Map.drop(["history", "patches"]) |> Map.put("historyIds", history_ids)
+      scene
+      |> Map.drop(["history", "patches"])
+      |> Map.put("historyIds", history_ids)
+      |> with_checkpoint_etag()
     )
 
     if Map.get(scene, "patches", []) != [], do: append(id, scene)
@@ -92,7 +103,13 @@ defmodule Whiteboard.Scenes do
       end
 
     Enum.each(Enum.drop(history_ids, 10), &Store.delete("snapshots", &1))
-    Store.put("scenes", id, Map.put(scene, "historyIds", Enum.take(history_ids, 10)))
+
+    Store.put(
+      "scenes",
+      id,
+      scene |> Map.put("historyIds", Enum.take(history_ids, 10)) |> with_checkpoint_etag()
+    )
+
     Store.delete("scene-patches", id)
   end
 
@@ -105,5 +122,10 @@ defmodule Whiteboard.Scenes do
     Store.delete("scene-patches", id)
   end
 
-  def export(scene), do: scene |> Map.delete("historyIds") |> Map.put("history", history(scene))
+  # The legacy JSON format: no derived etags, history inlined.
+  def export(scene) do
+    scene
+    |> Map.drop(["historyIds", "checkpointEtag"])
+    |> Map.put("history", Enum.map(history(scene), &Map.delete(&1, "checkpointEtag")))
+  end
 end

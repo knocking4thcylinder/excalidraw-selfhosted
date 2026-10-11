@@ -127,6 +127,18 @@ defmodule Whiteboard.APITest do
     assert request(:get, "/api/rooms/room/files/abc123?key=secret").status == 404
   end
 
+  test "scene etags are stored on write, with a hashing fallback for older records" do
+    register()
+    [etag] = get_resp_header(save(1), "etag")
+    assert etag == Whiteboard.Scenes.fingerprint("iv-1cipher-1")
+    assert Store.get("scenes", "room")["checkpointEtag"] == etag
+
+    Store.put("scenes", "room", Map.delete(Store.get("scenes", "room"), "checkpointEtag"))
+    legacy = request(:get, "/api/rooms/room/scene?key=secret")
+    assert get_resp_header(legacy, "etag") == [etag]
+    refute Map.has_key?(json(legacy), "checkpointEtag")
+  end
+
   test "HEAD /api/rooms is a body-less reachability probe" do
     register()
     probe = request(:head, "/api/rooms")

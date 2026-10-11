@@ -66,8 +66,10 @@ sed "s|@@FQDN@@|$FQDN|g" "$BASE/Caddyfile.template" > Caddyfile
 sudo systemctl stop excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service 2>/dev/null || true
 sudo podman rm -f excalidraw excalidraw-room excalidraw-caddy 2>/dev/null || true
 
+# Pinned to the digest the stack was verified with; the client speaks this
+# relay's protocol, so update it deliberately.
 sudo podman run -d --name excalidraw-room --restart always --network host \
-  -e PORT=3002 docker.io/excalidraw/excalidraw-room:latest
+  -e PORT=3002 docker.io/excalidraw/excalidraw-room@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70
 
 sudo podman run -d --name excalidraw --restart always --network host "$IMAGE"
 
