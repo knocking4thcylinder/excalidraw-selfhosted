@@ -1,7 +1,7 @@
 #!/bin/bash
 # Excalidraw self-hosted on SteamOS (Deck) — full stack installer
 # - app + collab room over Caddy HTTPS on :8443 (Tailscale cert, MagicDNS name)
-# - systemd units for boot persistence
+# - Quadlet/systemd units for boot persistence
 # - reinstall.sh kept in home dir to restore after SteamOS updates
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
@@ -37,7 +37,7 @@ cd "$BASE"
 SCENE_SYNC_ENABLED=${SCENE_SYNC_ENABLED:-$(cat "$BASE/.scene-sync-enabled" 2>/dev/null || echo false)}
 case "$SCENE_SYNC_ENABLED" in true|false) ;; *) echo 'SCENE_SYNC_ENABLED must be true or false.' >&2; exit 2 ;; esac
 
-# 0c. writable rootfs is required for /etc/systemd/system units and /etc/containers/storage.conf
+# 0c. writable rootfs is required for /etc/systemd/system, /etc/containers/systemd and storage.conf
 if [ "$(findmnt -n -o OPTIONS -T /etc/systemd/system | cut -d, -f1)" = ro ]; then
   echo "run: sudo steamos-readonly disable   (once, before this script)"
   exit 1
@@ -62,29 +62,12 @@ chmod 600 "$FQDN".key  # Caddy runs as root under rootful podman
 cd "$BASE"
 sed "s|@@FQDN@@|$FQDN|g" "$BASE/Caddyfile.template" > Caddyfile
 
-# 3. containers
-sudo systemctl stop excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service 2>/dev/null || true
-sudo podman rm -f excalidraw excalidraw-room excalidraw-caddy 2>/dev/null || true
-
-# Pinned to the digest the stack was verified with; the client speaks this
-# relay's protocol, so update it deliberately.
-sudo podman run -d --name excalidraw-room --restart always --network host \
-  -e PORT=3002 docker.io/excalidraw/excalidraw-room@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70
-
-sudo podman run -d --name excalidraw --restart always --network host "$IMAGE"
-
-sudo podman run -d --name excalidraw-caddy --restart always --network host \
-  -v "$BASE/Caddyfile:/etc/caddy/Caddyfile:ro" \
-  -v "$BASE/certs:/certs:ro" \
-  docker.io/library/caddy:2-alpine
-
-sudo podman rm -f excalidraw-shortcode 2>/dev/null || true
-# SQLite lives in shortcode-data; JSON files from the retired Node service are
-# imported once on first start (LEGACY_DATA_DIR) and never modified.
-sudo podman run -d --name excalidraw-shortcode --restart always --network host \
-  -e PORT=3003 -e LEGACY_DATA_DIR=/data -e SCENE_SYNC_ENABLED="$SCENE_SYNC_ENABLED" \
-  -v "$BASE/shortcode-data:/data" \
-  "$BACKEND_IMAGE"
+# 3. containers: systemd/ holds Quadlet definitions; deploy.sh start installs
+#    them and starts excalidraw-stack.target. Pull the public images now so
+#    the first start doesn't wait on the registry.
+printf 'SCENE_SYNC_ENABLED=%s\n' "$SCENE_SYNC_ENABLED" > "$BASE/.backend.env"
+sudo podman pull docker.io/excalidraw/excalidraw-room@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70
+sudo podman pull docker.io/library/caddy:2-alpine
 
 bash "$BASE/deploy.sh" start
 

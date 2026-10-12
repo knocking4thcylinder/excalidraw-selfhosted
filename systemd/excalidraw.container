@@ -1,0 +1,15 @@
+# The Excalidraw fork, served by nginx on :3000. deploy.sh builds the image.
+[Unit]
+Description=Excalidraw app
+PartOf=excalidraw-stack.target
+
+[Container]
+ContainerName=excalidraw
+Image=localhost/excalidraw-selfhost:latest
+Pull=never
+Network=host
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5

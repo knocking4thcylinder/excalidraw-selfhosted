@@ -8,7 +8,7 @@ For first-time setup, see the [README](../README.md#quick-start).
 Commit under `app/` (or packaging), push `master`, then on the Deck:
 
 ```bash
-cd ~/excalidraw && ./deploy.sh   # git pull (when a checkout) + rebuild + swap + HTTPS checks
+cd ~/excalidraw && ./deploy.sh   # git pull (when a checkout) + rebuild + restart + HTTPS checks
 ```
 
 No bundles: the Deck updates via `git pull`, falling back to files synced
@@ -17,8 +17,8 @@ from the Mac.
 For smaller updates, deploy only the affected component:
 
 ```bash
-./deploy.sh app       # build/swap frontend only; leave backend and proxy running
-./deploy.sh backend   # rebuild/swap the Elixir API; no frontend build
+./deploy.sh app       # rebuild/restart the frontend only; leave backend and proxy running
+./deploy.sh backend   # rebuild/restart the Elixir API; no frontend build
 ./deploy.sh full      # default: frontend + shortcode backend + proxy routes
 ./deploy.sh app --local  # deploy working-tree files without git pull
 ```
@@ -29,7 +29,7 @@ or proxy routes. `backend` updates the shortcode/rooms API, not the external
 `excalidraw-room` collaboration image. The API backend is the Elixir/SQLite
 service in `backend/`; the former Node service has been retired. On a Deck
 still running Node, the first backend deployment imports its JSON files into
-SQLite once and restores the old container if the health checks fail. See
+SQLite once and switches back to the old image if the health checks fail. See
 `backend/README.md` for preview, JSON import, backups, and recovery.
 Each deployment prints stage timings, including dependency and frontend builds.
 On Podman's `vfs` driver, builds automatically use a reusable, pinned Node
@@ -47,7 +47,12 @@ The container path retains dependencies under the `excalidraw-build-deps` image
 tag. Workspace additions must also be listed in the Dockerfile's manifest stage
 (`node --test deploy.test.js` checks this).
 To validate a build without changing the deployment image tag, run
-`DEPLOY_IMAGE_TAG=excalidraw-verify ./deploy.sh build`; no live containers are swapped.
+`DEPLOY_IMAGE_TAG=excalidraw-verify ./deploy.sh build`; nothing live is restarted.
+
+Before building, a deployment tags the running image as `:previous`
+(`excalidraw-selfhost:previous`, `excalidraw-api-elixir:previous`). If the build
+or the HTTPS checks fail, `:previous` is tagged back to `:latest` and the
+affected services restart on it, so a reboot never starts an untested image.
 
 Image cleanup is no longer part of each deployment. The next deployment (or
 `./deploy.sh start`) installs the weekly cleanup timer. To clean up immediately,
@@ -60,20 +65,27 @@ only when sufficient space is available for your storage driver.
 
 ## Recovery and diagnostics
 
-The whole stack is managed by a boot-enabled systemd service:
+The containers are declared in [`systemd/`](../systemd/) as Podman Quadlet
+`.container` files. `./deploy.sh start` (and every deployment) installs them
+into `/etc/containers/systemd/` with this checkout's paths filled in, along with
+the stack target and the timers in `/etc/systemd/system/`. Podman's systemd
+generator turns each `.container` file into a service of the same name, which
+recreates its container from the image on every start. To change a container's
+ports, volumes or environment, edit its file in `systemd/` and run
+`./deploy.sh start`; only containers whose definition changed are restarted.
+The API reads `SCENE_SYNC_ENABLED` from `.backend.env`, which deployments write.
 
 ```bash
-sudo systemctl status excalidraw-stack
-sudo systemctl restart excalidraw-stack  # restart all four containers
-sudo systemctl stop excalidraw-stack     # stop all four containers
-sudo systemctl start excalidraw-stack
-sudo systemctl start --no-block excalidraw-deploy  # build and deploy in the background
-sudo systemctl status excalidraw-deploy           # deployment result and recent logs
+sudo systemctl status excalidraw-stack.target
+sudo systemctl restart excalidraw-stack.target  # restart all four containers
+sudo systemctl stop excalidraw-stack.target     # stop all four containers
+sudo systemctl start excalidraw-stack.target
+sudo systemctl restart excalidraw.service       # one component
+journalctl -u excalidraw-shortcode.service      # logs (also: sudo podman logs)
 ```
 
-The stack service is a coordinator (`active (exited)` is normal); each component
-has its own continuously supervised service. Deployment is on-demand only,
-not run on every boot. In a synced directory without `.git`, it builds local files.
+The target is enabled at boot. Deployment is on-demand only, not run on every
+boot. In a synced directory without `.git`, it builds local files.
 
 ```bash
 ./deploy.sh start   # restore boot services and start existing containers; no rebuild
@@ -84,16 +96,14 @@ not run on every boot. In a synced directory without `.git`, it builds local fil
 Always use `https://<deck>.<tailnet>.ts.net:8443` on the tablet with
 Tailscale connected. Port 443 may serve another application. If the app works
 locally but the tablet cannot connect, check the HTTPS proxy with `status`;
-`start` repairs missing systemd units, including the Caddy unit, so the stack
-starts after reboot. It also renews the TLS certificate when it has less than
+`start` reinstalls missing or edited units, so the stack starts after reboot. It also renews the TLS certificate when it has less than
 seven days remaining, and installs a daily certificate-renewal timer.
 
 `./deploy.sh build` builds only the app image.
 
-Deploying builds the local files as they are; it does not download GitHub
-updates. Run `git pull` in a checkout of
-`knocking4thcylinder/excalidraw-selfhosted` first to pick them up.
-Deployment preserves `shortcode-data/` and prevents concurrent deployments.
+Deployments run `git pull` first unless `--local` is passed, then run the
+pulled version of `deploy.sh`. Deployment preserves `shortcode-data/` and
+prevents concurrent deployments.
 
 ## Pulling upstream Excalidraw
 
@@ -117,6 +127,7 @@ files live next to it and are never committed:
 | `shortcode-data/whiteboard.sqlite3` | rooms, folders, short codes, encrypted snapshots and images — **contains room keys** |
 | `certs/` | Tailscale-issued TLS certificate and key |
 | `Caddyfile` | generated from `Caddyfile.template` |
+| `.backend.env` | API settings (`SCENE_SYNC_ENABLED`), written by deployments |
 | `recovery/` | `shortcode-data/` backups taken by each backend deployment |
 | `.build-cache/` | reusable frontend build workspace |
 

@@ -1,0 +1,19 @@
+# HTTPS on :8443 with the Tailscale certificate. deploy.sh renders the
+# Caddyfile from Caddyfile.template.
+[Unit]
+Description=Excalidraw HTTPS proxy
+PartOf=excalidraw-stack.target
+
+[Container]
+ContainerName=excalidraw-caddy
+Image=docker.io/library/caddy:2-alpine
+Pull=missing
+Network=host
+Volume=@BASE@/Caddyfile:/etc/caddy/Caddyfile:ro
+Volume=@BASE@/certs:/certs:ro
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=300

@@ -13,3 +13,4 @@ fork/
 .build-cache/
 .scene-sync-enabled
 /AGENTS.md
+.backend.env

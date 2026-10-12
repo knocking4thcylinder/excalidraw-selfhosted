@@ -57,9 +57,10 @@ from the Mac).
      - The app image is used as built: it carries its nginx config
        (`app/excalidraw-app/nginx.conf`, port 3000) and connects the collab
        socket to its own origin
-     - systemd units (`excalidraw.service`, `excalidraw-room.service`,
-       `excalidraw-caddy.service`, `excalidraw-shortcode.service`) with
-       `Restart=always`, `WantedBy=multi-user.target`
+     - Podman Quadlet units in `systemd/` (`excalidraw`, `excalidraw-room`,
+       `excalidraw-caddy`, `excalidraw-shortcode`) with `Restart=always`,
+       grouped under the boot-enabled `excalidraw-stack.target`; installed by
+       `deploy.sh start`
      - `reinstall.sh` — post-SteamOS-update recovery (re-runs `install.sh`)
    - `mac/install-mac.sh`, `mac/fix_ts_routes.sh`, `mac/com.fixtsroutes.plist` —
      a LaunchDaemon (`user.fixtsroutes`) that, **every 20 seconds**, asserts a
@@ -154,7 +155,7 @@ from the Mac).
   ("Resource busy"); edit the host file, restart the container.
 - **SteamOS updates wipe podman's `/var/...` state** — but the installer moves
   storage to `/home/containers/storage` (survives updates) and `reinstall.sh`
-  regenerates containers from the fork clone in `~/excalidraw/fork`.
+  rebuilds the images from the checkout.
 
 ## Where I'd go next (for a successor model)
 

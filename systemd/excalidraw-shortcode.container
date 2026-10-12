@@ -1,0 +1,20 @@
+# Elixir/SQLite API on :3003. deploy.sh builds the image and writes
+# .backend.env (SCENE_SYNC_ENABLED). JSON files from the retired Node service
+# are imported once on first start (LEGACY_DATA_DIR) and never modified.
+[Unit]
+Description=Excalidraw API
+PartOf=excalidraw-stack.target
+
+[Container]
+ContainerName=excalidraw-shortcode
+Image=localhost/excalidraw-api-elixir:latest
+Pull=never
+Network=host
+Environment=PORT=3003 LEGACY_DATA_DIR=/data
+EnvironmentFile=@BASE@/.backend.env
+Volume=@BASE@/shortcode-data:/data
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5

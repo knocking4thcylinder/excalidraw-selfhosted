@@ -34,8 +34,9 @@ Draw with a stylus on an Android tablet and watch it appear live on a laptop. Ev
 - **A client for each device.** There's a no-Gradle Android WebView wrapper
   for the tablet and a route-fixer daemon that keeps the Mac on the tailnet
   when a VPN or proxy app interferes.
-- **One-command deploys.** `./deploy.sh` rebuilds, swaps the containers, runs
-  HTTPS health checks, and rolls back the API if those checks fail.
+- **One-command deploys.** `./deploy.sh` rebuilds, restarts what changed, runs
+  HTTPS health checks, and switches back to the previous images if those
+  checks fail.
 
 ## How it works
 
@@ -49,9 +50,9 @@ each request by path to one of three services:
 | **Room** `:3002` | `/socket.io/*` | The upstream `excalidraw-room` relay, which carries live edits between clients over one WebSocket each |
 | **API** `:3003` | `/api/*`, `/s/*` | The Elixir service in [`backend/`](backend/) that stores short codes, the room registry, folders, encrypted snapshots, and images in SQLite |
 
-Every component is a container supervised by its own systemd unit, under a
-coordinating `excalidraw-stack` service, so the stack comes back after a
-reboot.
+Each component is a container declared as a [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+unit in [`systemd/`](systemd/). systemd supervises all four under
+`excalidraw-stack.target`, so the stack comes back after a reboot.
 
 ## Quick start
 
@@ -115,7 +116,7 @@ detail.
 ## Deploying changes
 
 ```bash
-./deploy.sh              # pull, rebuild everything, swap containers, check HTTPS
+./deploy.sh              # pull, rebuild everything, restart, check HTTPS
 ./deploy.sh app          # frontend only
 ./deploy.sh backend      # Elixir API only
 ./deploy.sh app --local  # deploy the working tree without git pull
@@ -137,6 +138,7 @@ guards, certificate renewal, recovery, and pulling from upstream Excalidraw.
 ├── tools/restore-room.js re-encrypt a local .excalidraw export into a room
 ├── install.sh            first-time host installer (idempotent)
 ├── deploy.sh             build / deploy / status / logs / cleanup
+├── systemd/              Quadlet container units, stack target, timers
 ├── Caddyfile.template    HTTPS routes (edit this, not the generated Caddyfile)
 └── docs/                 rooms, operations, loading benchmark
 ```

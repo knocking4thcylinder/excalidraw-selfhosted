@@ -1,0 +1,9 @@
+[Unit]
+Description=Check Excalidraw TLS certificate daily
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1d
+
+[Install]
+WantedBy=timers.target

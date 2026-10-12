@@ -1,0 +1,7 @@
+[Unit]
+Description=Excalidraw self-hosted stack
+Wants=excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service
+After=excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service
+
+[Install]
+WantedBy=multi-user.target

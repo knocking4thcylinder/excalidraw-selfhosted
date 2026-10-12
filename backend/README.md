@@ -111,8 +111,9 @@ Never point two backend processes at the same SQLite database.
 Deployment builds the release image before stopping the old backend, backs up
 the data directory while the service is stopped, and reuses the existing
 `excalidraw-shortcode` container name, port, systemd unit and Caddy routes.
-The previous container is retained until the health checks pass; a failed
-deployment restores it. A database created during a failed first cutover is
+The previous image stays tagged `excalidraw-api-elixir:previous`; if the
+health checks fail, it is tagged back to `:latest` and the service restarts
+on it. A database created during a failed first cutover is
 moved into the backup directory, so a retry cannot silently reuse stale
 imported data. `install.sh` (and therefore `reinstall.sh`) runs the same image.
 

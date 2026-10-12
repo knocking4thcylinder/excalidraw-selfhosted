@@ -1,9 +1,19 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
+# tailscale lives in ~/.local/bin (login-shell PATH only); non-interactive
+# ssh has a minimal PATH, so add it explicitly.
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 BASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SERVICES=(excalidraw-room excalidraw-shortcode excalidraw excalidraw-caddy)
-APP_IMAGE=${DEPLOY_IMAGE_TAG:-excalidraw-selfhost}
+APP_IMAGE=excalidraw-selfhost
+BACKEND_IMAGE=excalidraw-api-elixir
+QUADLET_DIR=${QUADLET_DIR:-/etc/containers/systemd}
+UNIT_DIR=${UNIT_DIR:-/etc/systemd/system}
+# Hand-written units from before the Quadlet migration; same-named files in
+# /etc/systemd/system would shadow the generated ones.
+LEGACY_UNITS=(excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service
+  excalidraw-stack.service excalidraw-deploy.service excal-redeploy.service)
+USAGE='Usage: ./deploy.sh [deploy|full|app|backend] [--local] | [start|status|check|logs|build|cleanup|renew-cert]'
 
 lock_deploy() {
   if [ "$(readlink /proc/self/fd/9 2>/dev/null || true)" != "$BASE/.deploy.lock" ]; then
@@ -17,6 +27,15 @@ timed() {
   shift
   "$@"
   printf 'TIMING: %s: %ss\n' "$label" "$((SECONDS - started))"
+}
+
+# The Deck grants passwordless sudo for podman, systemctl and tee only; any
+# other sudo command blocks on a password prompt. Root-owned files (backend
+# data, system unit directories) are handled by a throwaway container instead.
+root_files() {
+  local mount=$1 command=$2
+  shift 2
+  sudo podman run --rm --network none -v "$mount:$mount" --entrypoint "$command" "$BACKEND_IMAGE" "$@"
 }
 
 check_build_storage() {
@@ -34,6 +53,7 @@ check_build_storage() {
 }
 
 build_fast() {
+  local image=$1
   command -v rsync >/dev/null || { echo 'Fast builds require rsync; use DEPLOY_BUILD_MODE=container instead.' >&2; exit 1; }
   check_build_storage 6291456
   local cache="$BASE/.build-cache" builder_image builder_config dependency_hash
@@ -72,12 +92,12 @@ build_fast() {
     echo 'Dependencies unchanged; installation skipped.'
   fi
   timed 'frontend compilation' sudo podman exec -e NODE_ENV=production -e NODE_OPTIONS=--no-deprecation -e BROWSERSLIST_IGNORE_OLD_DATA=1 excalidraw-builder yarn build:app:docker
-  timed 'runtime image' sudo podman build --layers -f "$BASE/app/Dockerfile.runtime" -t "$APP_IMAGE" "$cache/source/excalidraw-app"
+  timed 'runtime image' sudo podman build --layers -f "$BASE/app/Dockerfile.runtime" -t "$image" "$cache/source/excalidraw-app"
 }
 
 build_app() {
+  local image=$1 mode=${DEPLOY_BUILD_MODE:-auto}
   lock_deploy
-  local mode=${DEPLOY_BUILD_MODE:-auto}
   case "$mode" in
     auto)
       if [ "$(sudo podman info --format '{{.Store.GraphDriverName}}')" = vfs ] && command -v rsync >/dev/null; then
@@ -91,13 +111,15 @@ build_app() {
   esac
   printf 'Build mode: %s\n' "$mode"
   if [ "$mode" = fast ]; then
-    build_fast
+    build_fast "$image"
     return
   fi
   check_build_storage 12582912
-  cd "$BASE/app"
-  timed 'dependency image (cached unless manifests change)' sudo podman build --layers --target dependencies -t excalidraw-build-deps .
-  timed 'app image' sudo podman build --layers -t "$APP_IMAGE" .
+  (
+    cd "$BASE/app"
+    timed 'dependency image (cached unless manifests change)' sudo podman build --layers --target dependencies -t excalidraw-build-deps .
+    timed 'app image' sudo podman build --layers -t "$image" .
+  )
 }
 
 hostname_for_stack() {
@@ -124,143 +146,200 @@ renew_certificate() {
   hostname_for_stack
   if ! openssl x509 -checkend 604800 -noout -in "$BASE/certs/$FQDN.crt" >/dev/null 2>&1; then
     (cd "$BASE/certs" && tailscale cert --min-validity 168h "$FQDN")
-    if sudo systemctl is-active --quiet excalidraw-caddy.service; then
-      sudo systemctl restart excalidraw-caddy.service
-    else
-      sudo podman restart excalidraw-caddy >/dev/null
-    fi
+    sudo systemctl try-restart excalidraw-caddy.service
   fi
+}
+
+write_backend_env() {
+  printf 'SCENE_SYNC_ENABLED=%s\n' "$1" > "$BASE/.backend.env"
+}
+
+# Installs systemd/ (Quadlet .container files and plain units) with this
+# checkout's paths filled in. Unchanged files are left alone; running
+# containers whose definition changed are restarted.
+install_units() {
+  local file name destination rendered legacy=() changed=false restart=()
+  for name in "${LEGACY_UNITS[@]}"; do
+    if [ -e "$UNIT_DIR/$name" ]; then legacy+=("$name"); fi
+  done
+  if [ "${#legacy[@]}" -gt 0 ]; then
+    echo "Replacing hand-written units with Quadlet: ${legacy[*]}"
+    sudo systemctl disable --now "${legacy[@]}"
+    root_files "$UNIT_DIR" rm -f "${legacy[@]/#/$UNIT_DIR/}"
+    changed=true
+  fi
+  if [ ! -d "$QUADLET_DIR" ]; then
+    root_files "$(dirname "$QUADLET_DIR")" mkdir -p "$QUADLET_DIR"
+  fi
+  mkdir -p "$BASE/shortcode-data"
+  [ -f "$BASE/.backend.env" ] || write_backend_env "$(cat "$BASE/.scene-sync-enabled" 2>/dev/null || echo false)"
+  for file in "$BASE"/systemd/*; do
+    name=$(basename "$file")
+    case "$name" in
+      *.container) destination="$QUADLET_DIR/$name" ;;
+      *) destination="$UNIT_DIR/$name" ;;
+    esac
+    rendered=$(sed -e "s|@BASE@|$BASE|g" -e "s|@HOME@|$HOME|g" -e "s|@USER@|$(id -un)|g" -e "s|@FQDN@|$FQDN|g" "$file")
+    if [ "$rendered" != "$(cat "$destination" 2>/dev/null || true)" ]; then
+      printf '%s\n' "$rendered" | sudo tee "$destination" >/dev/null
+      changed=true
+      if [[ "$name" == *.container ]]; then restart+=("${name%.container}.service"); fi
+    fi
+  done
+  if "$changed"; then
+    sudo systemctl daemon-reload
+    sudo systemctl enable excalidraw-stack.target excalidraw-cert-renew.timer excalidraw-cleanup.timer
+    if [ "${#restart[@]}" -gt 0 ]; then sudo systemctl try-restart "${restart[@]}"; fi
+  fi
+}
+
+require_images() {
+  local image
+  for image in "$APP_IMAGE" "$BACKEND_IMAGE"; do
+    sudo podman image exists "$image" || { echo "Missing image $image. Run ./install.sh first." >&2; exit 1; }
+  done
 }
 
 start_stack() {
   hostname_for_stack
-  local service
-  for service in "${SERVICES[@]}"; do
-    sudo podman container exists "$service" || {
-      echo "Missing container $service. Run ./install.sh first." >&2
-      exit 1
-    }
-  done
+  require_images
+  install_units
   renew_certificate
-  for service in "${SERVICES[@]}"; do
-    sudo tee "/etc/systemd/system/$service.service" >/dev/null <<EOF
-[Unit]
-Description=Excalidraw $service
-PartOf=excalidraw-stack.service
-Wants=network-online.target
-After=network-online.target
-StartLimitIntervalSec=0
+  sudo systemctl start excalidraw-stack.target excalidraw-cert-renew.timer excalidraw-cleanup.timer
+}
 
-[Service]
-ExecStartPre=-/usr/bin/podman stop -t 10 $service
-ExecStart=/usr/bin/podman start -a $service
-ExecStop=/usr/bin/podman stop -t 10 $service
-Restart=always
-RestartSec=5
-TimeoutStopSec=30
+# Keeps the running image as :previous so a failed deploy can switch back.
+keep_previous() {
+  sudo podman tag "$1:latest" "$1:previous"
+}
 
-[Install]
-WantedBy=multi-user.target
-EOF
-  done
-  sudo tee /etc/systemd/system/excalidraw-stack.service >/dev/null <<'EOF'
-[Unit]
-Description=Excalidraw self-hosted stack
-Wants=excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service
-After=excalidraw.service excalidraw-room.service excalidraw-shortcode.service excalidraw-caddy.service
+deploy() {
+  local mode=$1 local_files=false started=$SECONDS scene_sync
+  shift
+  if [ "${1:-}" = --local ]; then local_files=true; shift; fi
+  [ "$#" -eq 0 ] || { echo "$USAGE" >&2; exit 2; }
+  scene_sync=${SCENE_SYNC_ENABLED:-$(cat "$BASE/.scene-sync-enabled" 2>/dev/null || echo false)}
+  case "$scene_sync" in true|false) ;; *) echo 'SCENE_SYNC_ENABLED must be true or false.' >&2; exit 2 ;; esac
+  lock_deploy
+  cd "$BASE"
 
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/true
+  if ! "$local_files"; then
+    printf '== %s deploy: update checkout ==\n' "$mode"
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git pull --ff-only
+      # Run the version of this script that was just pulled.
+      exec bash "$BASE/deploy.sh" "$mode" --local
+    fi
+    echo "WARNING: not a git checkout — GitHub updates will NOT be downloaded; building local files."
+  fi
 
-[Install]
-WantedBy=multi-user.target
-EOF
-  sudo tee /etc/systemd/system/excalidraw-deploy.service >/dev/null <<EOF
-[Unit]
-Description=Build and deploy self-hosted Excalidraw
-Wants=network-online.target
-After=network-online.target tailscaled.service
+  STAGE_LABEL=
+  STAGE_STARTED=$SECONDS
+  stage() {
+    if [ -n "$STAGE_LABEL" ]; then printf 'TIMING: %s: %ss\n' "$STAGE_LABEL" "$((SECONDS - STAGE_STARTED))"; fi
+    printf '\n== %s ==\n' "$1"
+    STAGE_STARTED=$SECONDS
+    STAGE_LABEL=$1
+  }
 
-[Service]
-Type=oneshot
-User=$(id -un)
-Environment="HOME=$HOME"
-Environment="PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="FQDN=$FQDN"
-WorkingDirectory=$BASE
-ExecStart=/bin/bash "$BASE/deploy.sh" deploy
-TimeoutStartSec=infinity
-EOF
-  sudo tee /etc/systemd/system/excalidraw-cert-renew.service >/dev/null <<EOF
-[Unit]
-Description=Renew Excalidraw Tailscale TLS certificate
-Wants=network-online.target
-After=network-online.target tailscaled.service
+  stage "$mode deploy: preflight"
+  start_stack
 
-[Service]
-Type=oneshot
-User=$(id -un)
-Environment="HOME=$HOME"
-Environment="PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="FQDN=$FQDN"
-ExecStart=/bin/bash "$BASE/deploy.sh" renew-cert
-EOF
-  sudo tee /etc/systemd/system/excalidraw-cert-renew.timer >/dev/null <<'EOF'
-[Unit]
-Description=Check Excalidraw TLS certificate daily
+  APP_KEPT=false BACKEND_KEPT=false APP_SWAPPED=false BACKEND_SWAPPED=false NEW_BACKEND_DATABASE=false BACKUP=
+  restore_previous() {
+    # Subshells inherit the trap (set -E); roll back once, from the deploy itself.
+    [ "$BASHPID" = "$$" ] || return 0
+    trap - ERR
+    echo 'Deployment failed; switching back to the previous images.' >&2
+    if "$APP_KEPT"; then sudo podman tag "$APP_IMAGE:previous" "$APP_IMAGE:latest" || true; fi
+    if "$BACKEND_KEPT"; then sudo podman tag "$BACKEND_IMAGE:previous" "$BACKEND_IMAGE:latest" || true; fi
+    if "$BACKEND_SWAPPED"; then
+      sudo systemctl stop excalidraw-shortcode.service || true
+      if "$NEW_BACKEND_DATABASE"; then
+        local suffix database
+        for suffix in '' -wal -shm; do
+          database="$BASE/shortcode-data/whiteboard.sqlite3$suffix"
+          if [ -e "$database" ]; then
+            root_files "$BASE" mv "$database" "$BACKUP/failed-whiteboard.sqlite3$suffix" || true
+          fi
+        done
+      fi
+      write_backend_env "$(cat "$BASE/.scene-sync-enabled" 2>/dev/null || echo false)"
+      sudo systemctl start excalidraw-shortcode.service || true
+    fi
+    if "$APP_SWAPPED"; then sudo systemctl restart excalidraw.service || true; fi
+  }
+  trap restore_previous ERR
 
-[Timer]
-OnBootSec=5min
-OnUnitActiveSec=1d
+  if [ "$mode" != backend ]; then
+    stage 'app image build'
+    keep_previous "$APP_IMAGE"
+    APP_KEPT=true
+    build_app "$APP_IMAGE"
+  fi
 
-[Install]
-WantedBy=timers.target
-EOF
-  sudo tee /etc/systemd/system/excalidraw-cleanup.service >/dev/null <<EOF
-[Unit]
-Description=Clean unused Excalidraw build images
+  if [ "$mode" != app ]; then
+    stage 'Elixir backend image build'
+    keep_previous "$BACKEND_IMAGE"
+    BACKEND_KEPT=true
+    sudo podman build --layers -t "$BACKEND_IMAGE" "$BASE/backend"
 
-[Service]
-Type=oneshot
-User=$(id -un)
-Environment="HOME=$HOME"
-Environment="PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/bin/bash "$BASE/deploy.sh" cleanup
-TimeoutStartSec=infinity
-EOF
-  sudo tee /etc/systemd/system/excalidraw-cleanup.timer >/dev/null <<'EOF'
-[Unit]
-Description=Clean unused Excalidraw build images weekly
+    stage 'backend restart (persisted data retained)'
+    sudo systemctl stop excalidraw-shortcode.service
+    BACKEND_SWAPPED=true
+    BACKUP="$BASE/recovery/backend-$(date +%Y%m%d-%H%M%S)-$$"
+    mkdir -p "$BACKUP"
+    chmod 700 "$BACKUP"
+    root_files "$BASE" cp -a "$BASE/shortcode-data" "$BACKUP/data"
+    echo "Backend data backup: $BACKUP/data"
+    if [ ! -e "$BASE/shortcode-data/whiteboard.sqlite3" ]; then NEW_BACKEND_DATABASE=true; fi
+    write_backend_env "$scene_sync"
+    sudo systemctl start excalidraw-shortcode.service
+  fi
 
-[Timer]
-OnCalendar=weekly
-Persistent=true
+  if [ "$mode" = full ]; then
+    stage 'caddy routes'
+    local caddy_config
+    caddy_config=$(sed "s|@@FQDN@@|$FQDN|g" "$BASE/Caddyfile.template")
+    if [ "$caddy_config" != "$(cat "$BASE/Caddyfile" 2>/dev/null || true)" ]; then
+      printf '%s\n' "$caddy_config" > "$BASE/Caddyfile"
+      sudo systemctl restart excalidraw-caddy.service
+    else
+      echo 'Caddy routes unchanged; restart skipped.'
+    fi
+  fi
 
-[Install]
-WantedBy=timers.target
-EOF
-  sudo systemctl daemon-reload
-  for service in "${SERVICES[@]}"; do
-    sudo systemctl enable --now "$service.service"
-  done
-  sudo systemctl enable --now excalidraw-stack.service
-  sudo systemctl enable --now excalidraw-cert-renew.timer
-  sudo systemctl enable --now excalidraw-cleanup.timer
+  if [ "$mode" != backend ]; then
+    stage 'app restart'
+    APP_SWAPPED=true
+    sudo systemctl restart excalidraw.service
+  fi
+
+  stage 'HTTPS checks'
   check_stack
+  trap - ERR
+  if [ "$mode" != app ]; then printf '%s\n' "$scene_sync" > "$BASE/.scene-sync-enabled"; fi
+  # Keep the newest backend data backups only; each one is a full database copy.
+  if [ "$mode" != app ] && [ -d "$BASE/recovery" ]; then
+    find "$BASE/recovery" -maxdepth 1 -name 'backend-*' -type d -print | sort | head -n -"${BACKEND_BACKUPS_KEPT:-10}" |
+      while IFS= read -r old_backup; do root_files "$BASE" rm -rf -- "$old_backup"; done
+  fi
+  printf 'TIMING: HTTPS checks: %ss\n' "$((SECONDS - STAGE_STARTED))"
+  printf 'TIMING: total %s deploy: %ss\n' "$mode" "$((SECONDS - started))"
 }
 
 case "${1:-deploy}" in
   deploy|full|app|backend)
-    hostname_for_stack
     mode=${1:-full}
     [ "$mode" != deploy ] || mode=full
     if [ "$#" -gt 0 ]; then shift; fi
-    exec bash "$BASE/redeploy.sh" "$mode" "$@"
+    deploy "$mode" "$@"
     ;;
-  start) start_stack ;;
-  build) build_app ;;
+  start)
+    start_stack
+    check_stack
+    ;;
+  build) build_app "${DEPLOY_IMAGE_TAG:-$APP_IMAGE}" ;;
   cleanup)
     lock_deploy
     timed 'image cleanup' sudo podman image prune -f
@@ -281,6 +360,6 @@ case "${1:-deploy}" in
       sudo podman logs --tail 50 "$service"
     done
     ;;
-  -h|--help|help) echo 'Usage: ./deploy.sh [deploy|full|app|backend] [--local] | [start|status|check|logs|build|cleanup|renew-cert]' ;;
-  *) echo 'Usage: ./deploy.sh [deploy|full|app|backend] [--local] | [start|status|check|logs|build|cleanup|renew-cert]' >&2; exit 2 ;;
+  -h|--help|help) echo "$USAGE" ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
 esac

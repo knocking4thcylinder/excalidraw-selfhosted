@@ -1,0 +1,9 @@
+[Unit]
+Description=Clean unused Excalidraw build images
+
+[Service]
+Type=oneshot
+User=@USER@
+Environment="HOME=@HOME@" "PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/bash @BASE@/deploy.sh cleanup
+TimeoutStartSec=infinity

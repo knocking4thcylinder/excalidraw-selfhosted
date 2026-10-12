@@ -1,0 +1,19 @@
+# Upstream Socket.IO relay on :3002. Pinned to the digest the stack was
+# verified with; the client speaks this relay's protocol, so update it
+# deliberately.
+[Unit]
+Description=Excalidraw collaboration relay
+PartOf=excalidraw-stack.target
+
+[Container]
+ContainerName=excalidraw-room
+Image=docker.io/excalidraw/excalidraw-room@sha256:2fe999f9be4379e3ee282fc45d75d84a691a6383dde33544514cc395287c7a70
+Pull=missing
+Network=host
+Environment=PORT=3002
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
