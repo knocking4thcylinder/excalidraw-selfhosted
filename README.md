@@ -116,13 +116,17 @@ detail.
 ## Deploying changes
 
 ```bash
-./deploy.sh              # pull, rebuild everything, restart, check HTTPS
-./deploy.sh app          # frontend only
-./deploy.sh backend      # Elixir API only
-./deploy.sh app --local  # deploy the working tree without git pull
-./deploy.sh status       # container and service state, plus live health checks
-./deploy.sh logs         # recent logs from all four services
+just deploy              # pull, rebuild everything, restart, check HTTPS
+just app                 # frontend only
+just backend             # Elixir API only
+just app --local         # deploy the working tree without git pull
+just status              # container and service state, plus live health checks
+just logs                # recent logs from all four services
 ```
+
+Run `just` to list every recipe. The recipes call `./deploy.sh`, which works on
+its own too (`./deploy.sh app --local`) if [just](https://github.com/casey/just)
+isn't installed.
 
 [docs/operations.md](docs/operations.md) covers build caching, disk-space
 guards, certificate renewal, recovery, and pulling from upstream Excalidraw.
@@ -137,6 +141,7 @@ guards, certificate renewal, recovery, and pulling from upstream Excalidraw.
 ├── mac/                  route-fixer LaunchDaemon + installer
 ├── tools/restore-room.js re-encrypt a local .excalidraw export into a room
 ├── install.sh            first-time host installer (idempotent)
+├── justfile              command list: deploy, status, logs, test, …
 ├── deploy.sh             build / deploy / status / logs / cleanup
 ├── systemd/              Quadlet container units, stack target, timers
 ├── Caddyfile.template    HTTPS routes (edit this, not the generated Caddyfile)
@@ -154,7 +159,7 @@ yarn test:typecheck && yarn test:app --watch=false
 cd backend && mix deps.get && mix test
 
 # Deploy scripts
-node --test deploy.test.js
+just test
 ```
 
 ## Security model
